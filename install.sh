@@ -277,7 +277,9 @@ ensure_admin_credentials() {
 
 prepare_runtime_config() {
     mkdir -p "$RUNTIME_DIR"
+    chmod 755 "$RUNTIME_DIR"
     cp -- "$SCRIPT_DIR/portal/config.yml" "$RUNTIME_CONFIG"
+    chmod 644 "$RUNTIME_CONFIG"
 
     # The self-contained installer uses vcsim. Local QEMU remains available for
     # advanced deployments by using the original portal/config.yml and paths.
