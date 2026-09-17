@@ -5,6 +5,25 @@ version validates VM requests, creates approved VMs in vcsim through Ansible,
 and simulates phpIPAM, NetBox and Nagios workflow steps. VMware inventory inspection remains available in
 `vmware-test.yml`.
 
+## Quick install
+
+On a Linux host with Docker Engine and Docker Compose v2 installed:
+
+```bash
+git clone https://github.com/impsik/vm-automation-deployment.git
+cd vm-automation-deployment
+./install.sh
+```
+
+The installer asks for the local administrator password, creates the required
+`.env` file with a PBKDF2-SHA256 hash, prepares the self-contained VMware vcsim
+demo backend and starts the portal. Open <http://localhost:8080> afterwards.
+Run `./install.sh --no-start` if you only want to prepare the configuration.
+
+The generated `.env` and `.runtime/` directory are local-only and are ignored
+by Git. Advanced deployments using the local QEMU backend can continue to use
+`portal/config.yml` and provide the host-specific libvirt and storage paths.
+
 ## Run with Docker Compose
 
 ```bash
