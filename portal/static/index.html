@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VM Foundry</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/resize.css?v=20260901-1">
+  <link rel="stylesheet" href="/elisa-theme.css?v=20260724-2">
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><span class="brand-mark">VF</span><strong>VM Foundry</strong></div>
+      <nav>
+        <button class="nav-item active" data-view="catalog"><span>＋</span> New virtual machine</button>
+        <button class="nav-item" data-view="requests"><span>◫</span> <i id="requestNavLabel" style="font-style:normal">My requests</i> <b id="requestCount">0</b></button>
+        <button class="nav-item" data-view="settings"><span>⚙</span> Settings</button>
+        <button class="nav-item" id="logout"><span>↪</span> Log out</button>
+      </nav>
+      <div class="aside-note"><span class="status-dot"></span><div><strong id="signedInUser">PoC environment</strong><small>VMware vcsim connected</small></div></div>
+    </aside>
+
+    <main>
+      <section id="catalog" class="view active">
+        <header><div><p class="eyebrow">SELF-SERVICE CATALOG</p><h1>Create a virtual machine</h1><p>Choose a standard profile or configure resources for your workload.</p></div><span class="environment">POC</span></header>
+
+        <form id="requestForm">
+          <div class="panel">
+            <div class="section-heading"><span>01</span><div><h2>Machine identity</h2><p>Tell us where this machine belongs.</p></div></div>
+            <div class="grid two">
+              <label>VM name<input name="hostname" placeholder="app-dev-01" required pattern="[a-z0-9][a-z0-9-]*"></label>
+              <label>Full DNS name<input id="fqdn" name="fqdn" placeholder="vm-name.*" required></label>
+              <label>Environment<select name="environment" id="environment"></select></label>
+              <label>Project<input name="project" placeholder="Customer portal" required></label>
+              <label>Owner<input name="owner" placeholder="team-platform@example.com" required></label>
+              <label>SSH public key<select name="ssh_key_id" id="sshKey" required></select></label>
+            </div>
+            <p class="hostmaster-note" id="hostmasterNote"></p>
+          </div>
+
+          <div class="panel">
+            <div class="section-heading"><span>02</span><div><h2>Compute profile</h2><p>Standard sizes are provisioned automatically.</p></div></div>
+            <div id="profiles" class="profile-grid"></div>
+            <div id="customResources" class="grid three custom hidden">
+              <label>vCPU<input name="vcpu" type="number" min="1" value="4"></label>
+              <label>Memory (GB)<input name="memory_gb" type="number" min="1" value="8"></label>
+              <label>OS disk (GB)<input name="disk_gb" type="number" min="1" value="80"></label>
+            </div>
+            <div id="policyNotice" class="notice hidden"></div>
+          </div>
+
+          <div class="panel">
+            <div class="section-heading"><span>03</span><div><h2>Image and network</h2><p>Networking is simulated in this PoC.</p></div></div>
+            <div class="grid two">
+              <label>Operating system<select name="image" id="image"></select></label>
+              <label>Network<select name="network" id="network"></select></label>
+            </div>
+            <label class="purpose">Purpose (optional)<textarea name="purpose" rows="3" placeholder="Short description of the workload"></textarea></label>
+          </div>
+
+          <div class="panel">
+            <div class="section-heading"><span>04</span><div><h2>Additional storage</h2><p>Add up to 20 LVM data disks. Each disk is mounted persistently on first boot.</p></div></div>
+            <div id="additionalDiskList" class="disk-list"></div>
+            <button id="addAdditionalDisk" class="secondary" type="button">＋ Add data disk</button>
+          </div>
+
+          <div id="errors" class="errors hidden"></div>
+          <div class="submit-row"><div><strong id="summary">2 vCPU · 4 GB RAM · 40 GB disk</strong><small id="approvalSummary">Eligible for automatic provisioning</small></div><button class="primary" id="submitRequest" type="submit">Submit request <span>→</span></button></div>
+        </form>
+      </section>
+
+      <section id="requests" class="view">
+        <header><div><p class="eyebrow">OPERATIONS</p><h1 id="requestsHeading">My virtual machines</h1><p id="requestsDescription">Track your provisioning requests and completed machines.</p></div><button id="refresh" class="secondary">Refresh</button></header>
+        <div id="approvalAlert" class="approval-alert hidden"></div>
+        <div id="requestList" class="request-list"></div>
+      </section>
+
+      <section id="settings" class="view">
+        <header id="userSettingsHeader"><div><p class="eyebrow">USER SETTINGS</p><h1>SSH public keys</h1><p>Manage the keys available when ordering a virtual machine.</p></div></header>
+        <header id="adminSettingsHeader" class="hidden"><div><p class="eyebrow">ADMIN SETTINGS</p><h1>Administrator settings</h1><p>Manage the local administrator account.</p></div></header>
+        <div id="sshKeySettings">
+        <div class="panel">
+          <div class="section-heading"><span>01</span><div><h2>Add public key</h2><p>Paste an OpenSSH public key. Private keys must never be entered here.</p></div></div>
+          <form id="sshKeyForm">
+            <div class="grid two">
+              <label>Key label<input name="label" placeholder="Work laptop" maxlength="64" required></label>
+              <label>Linux login user<input id="sshLoginUser" name="login_user" value="imre" pattern="[a-z_][a-z0-9_-]{0,31}" maxlength="32" required></label>
+            </div>
+            <label class="purpose">OpenSSH public key<textarea name="public_key" rows="5" placeholder="ssh-ed25519 AAAA... user@computer" required></textarea></label>
+            <div id="sshKeyErrors" class="errors hidden"></div>
+            <div class="settings-actions"><button class="primary" type="submit">Save public key</button></div>
+          </form>
+        </div>
+        <div class="panel">
+          <div class="section-heading"><span>02</span><div><h2>Saved keys</h2><p>Only these keys can be selected for new VM requests.</p></div></div>
+          <div id="sshKeyList" class="key-list"></div>
+        </div>
+        </div>
+        <div id="adminPasswordSettings" class="panel hidden">
+          <div class="section-heading"><span>01</span><div><h2>Change password</h2><p>Changing the password signs out other local administrator sessions.</p></div></div>
+          <form id="adminPasswordForm">
+            <div class="grid two">
+              <label>Current password<input name="current_password" type="password" autocomplete="current-password" required></label>
+              <span></span>
+              <label>New password<input name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+              <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+            </div>
+            <div id="adminPasswordErrors" class="errors hidden"></div>
+            <div class="settings-actions"><button class="primary" type="submit">Change password</button></div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="consoleModal" class="console-modal hidden" role="dialog" aria-modal="true" aria-labelledby="consoleTitle">
+    <div class="console-window">
+      <div class="console-header"><strong id="consoleTitle">VM console</strong><button id="consoleClose" type="button">Close</button></div>
+      <div class="console-screen"><iframe id="consoleFrame" title="Interactive virtual machine console" src="about:blank"></iframe></div>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/app.js?v=20260901-3"></script>
+</body>
+</html>

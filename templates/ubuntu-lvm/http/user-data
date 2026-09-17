@@ -1,0 +1,25 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  identity:
+    hostname: ubuntu-lvm-template
+    username: packer
+    password: "$6$vmfoundry$Mpydx9wOkY/zKySmOT8EP0hBhGi3RmpcFLHIzWfZimj5LJ55bnAPzu3WXhBugy/7P1un4d22.PQ1ZQcyz9kgR1"
+  ssh:
+    install-server: true
+    allow-pw: true
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+  packages:
+    - cloud-init
+    - lvm2
+    - qemu-guest-agent
+  late-commands:
+    - curtin in-target --target=/target -- systemctl enable qemu-guest-agent
+  updates: security
+  shutdown: reboot

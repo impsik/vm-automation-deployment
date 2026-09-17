@@ -1,0 +1,63 @@
+organization:
+  name: Example Infrastructure
+  portal_name: VM Foundry
+
+authentication:
+  # ForumSys is a public test service and must not be used for production.
+  ldap_url: ldap://ldap.forumsys.com:389
+  use_ssl: false
+  start_tls: false
+  connect_timeout_seconds: 8
+  user_dn_pattern: uid={username},dc=example,dc=com
+  session_ttl_hours: 8
+
+  # LDAP users are self-service users. Administration uses the separate local
+  # /admin-login.html endpoint and Docker environment credentials.
+  admin_users: []
+
+  # Set SESSION_SECRET through the environment in a real deployment.
+  # It is reserved for a future multi-instance signed-session implementation.
+
+support:
+  email: it.taristu@domeen.ee
+
+notifications:
+  enabled: true
+  to: imre@localhost
+  from: vm-foundry@localhost
+  smtp_host: 172.17.0.1
+  smtp_port: 25
+
+# PoC only: no message leaves the portal. The generated message is stored with
+# the VM request and shown in its workflow events.
+hostmaster:
+  email: hostmaster@domeen.ee
+  description: Please register the new virtual machine DNS name.
+
+# Fake PoC networks. The CIDR is descriptive only; vcsim attaches the matching
+# distributed portgroup but does not provide IP addressing or routing.
+networks:
+  - {cidr: 172.17.100.0/24, description: Administration network, portgroup: 172.17.100.0-24 Admin network}
+  - {cidr: 172.17.110.0/24, description: Application network, portgroup: poc-net-app}
+  - {cidr: 172.17.120.0/24, description: Web server network, portgroup: poc-net-web}
+  - {cidr: 172.17.130.0/24, description: Integration network, portgroup: poc-net-integration}
+  - {cidr: 172.17.140.0/24, description: Development network, portgroup: poc-net-development}
+  - {cidr: 172.17.150.0/24, description: Test network, portgroup: poc-net-test}
+  - {cidr: 172.17.160.0/24, description: Backup network, portgroup: poc-net-backup}
+  - {cidr: 172.17.170.0/24, description: Monitoring network, portgroup: poc-net-monitoring}
+  - {cidr: 172.17.180.0/24, description: Management network, portgroup: poc-net-management}
+  - {cidr: 172.17.200.0/24, description: Database network, portgroup: poc-net-database}
+
+provisioning:
+  # Temporary PoC backend. Change to "vcsim" for the VMware simulator.
+  backend: local_qemu
+  local_qemu:
+    uri: qemu:///system
+    network: default
+    ssh_user: imre
+    storage_path: /home/imre/chia/Hetznerist/kvm/vm-foundry
+    cloud_init_template: /home/imre/chia/Hetznerist/kvm/cloud_init.cfg.orig
+    reserve_percent: 20
+    images:
+      Ubuntu 24.04 LTS (LVM): /home/imre/chia/Hetznerist/kvm/templates/ubuntu-24.04-lvm/ubuntu-24.04-lvm.qcow2
+      Ubuntu 22.04 LTS (LVM): /home/imre/chia/Hetznerist/kvm/templates/ubuntu-22.04-lvm/ubuntu-22.04-lvm.qcow2

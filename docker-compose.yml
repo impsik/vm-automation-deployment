@@ -1,0 +1,85 @@
+services:
+  portal:
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
+    container_name: vm-self-service-portal
+    environment:
+      PORT: "8080"
+      DATA_FILE: /data/portal.db
+      VCENTER_HOST: 127.0.0.1
+      VCENTER_PORT: "8989"
+      VCENTER_USERNAME: admin
+      VCENTER_PASSWORD: test-password
+      CONFIG_FILE: /app/config.yml
+      LOCAL_ADMIN_USERNAME: ${LOCAL_ADMIN_USERNAME:?Set LOCAL_ADMIN_USERNAME in .env}
+      LOCAL_ADMIN_PASSWORD_HASH: ${LOCAL_ADMIN_PASSWORD_HASH:?Set LOCAL_ADMIN_PASSWORD_HASH in .env}
+    network_mode: host
+    volumes:
+      - portal-data:/data
+      - ./portal/config.yml:/app/config.yml:ro
+      - /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+      - /home/imre/chia/Hetznerist/kvm:/home/imre/chia/Hetznerist/kvm:ro
+      - /home/imre/chia/Hetznerist/kvm/vm-foundry:/home/imre/chia/Hetznerist/kvm/vm-foundry
+    group_add:
+      - "148"
+    depends_on:
+      vcsim:
+        condition: service_started
+      vcsim-init:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vcsim:
+    image: vmware/vcsim:v0.55.1
+    container_name: vcsim
+    command:
+      - "-l"
+      - ":8989"
+      - "-username"
+      - "admin"
+      - "-password"
+      - "test-password"
+      - "-dc"
+      - "2"
+      - "-cluster"
+      - "2"
+      - "-host"
+      - "3"
+      - "-ds"
+      - "4"
+      - "-pg"
+      - "4"
+      - "-pool"
+      - "2"
+      - "-vm"
+      - "2"
+      - "-api-version"
+      - "8.0"
+    ports:
+      - "8989:8989"
+    restart: unless-stopped
+
+  vcsim-init:
+    image: vmware-test-portal
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
+    entrypoint: ["/bin/sh", "/init-networks.sh"]
+    environment:
+      GOVC_URL: https://admin:test-password@vcsim:8989
+      GOVC_INSECURE: "1"
+      GOVC_DATACENTER: DC0
+    volumes:
+      - ./vcsim/init-networks.sh:/init-networks.sh:ro
+    depends_on:
+      - vcsim
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/networks-ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  portal-data:

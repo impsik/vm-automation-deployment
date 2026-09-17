@@ -1,0 +1,174 @@
+:root {
+  --ink: #171c43;
+  --muted: #70707a;
+  --paper: #f6f6f7;
+  --card: #fdfdfd;
+  --line: #d2d2d6;
+  --green: #005fed;
+  --lime: #ffffff;
+  --nav: #101221;
+  --warn: #6c3a11;
+  --red: #e0022a;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+aside,
+.intro {
+  background: #101221;
+}
+
+.brand-mark,
+.intro .brand span {
+  background: #ffffff;
+  color: #00239d;
+}
+
+.nav-item {
+  color: #d2d2d6;
+}
+
+.nav-item.active,
+.nav-item:hover {
+  background: #272d41;
+  color: #ffffff;
+}
+
+.nav-item b {
+  background: #171c43;
+}
+
+.aside-note {
+  border-color: #40404a;
+}
+
+.aside-note small,
+.intro div > p:last-child,
+.intro small {
+  color: #d2d2d6;
+}
+
+.status-dot {
+  background: #32dbbc;
+  box-shadow: 0 0 0 4px #0d281e;
+}
+
+.eyebrow,
+.section-heading > span {
+  color: #00239d;
+}
+
+input,
+select,
+textarea {
+  border-color: #d2d2d6;
+  background: #fdfdfd;
+  color: #171c43;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #005fed;
+  box-shadow: 0 0 0 3px rgb(0 95 237 / 14%);
+}
+
+.profile,
+.disk-row,
+.key-card {
+  background: #fafafb;
+}
+
+.profile:hover {
+  border-color: #96c5ff;
+}
+
+.profile.selected {
+  border-color: #005fed;
+  background: #f0f7ff;
+}
+
+.profile .check,
+.resize-panel summary {
+  color: #005fed;
+}
+
+.primary,
+.approve,
+.login-panel button {
+  background: #005fed;
+  color: #ffffff;
+}
+
+.primary:hover,
+.login-panel button:hover {
+  background: #064aac;
+}
+
+.secondary {
+  border-color: #8d8d95;
+  background: #ffffff;
+  color: #171c43;
+}
+
+.notice,
+.badge.awaiting_approval,
+.badge.resize_awaiting_approval {
+  background: #fffaf2;
+  color: #6c3a11;
+}
+
+.badge.completed {
+  background: #edf7f4;
+  color: #008253;
+}
+
+.badge.rejected,
+.errors,
+.error {
+  background: #fff5f7;
+  color: #e0022a;
+}
+
+.errors,
+.error {
+  border-color: #ffb9b5;
+}
+
+.reject,
+.disk-remove,
+.key-delete {
+  border-color: #ffb9b5;
+  background: #ffffff;
+  color: #e0022a;
+}
+
+.reject:hover,
+.disk-remove:hover,
+.key-delete:hover {
+  background: #fff5f7;
+}
+
+.timeline li::before {
+  background: #005fed;
+}
+
+.toast {
+  background: #171c43;
+}
+
+.login-panel {
+  background: #f6f6f7;
+}
+
+.login-panel form {
+  border-color: #d2d2d6;
+}
+
+.login-panel form .eyebrow,
+.login-panel .help a {
+  color: #005fed;
+}

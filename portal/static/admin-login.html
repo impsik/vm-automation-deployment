@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VM Foundry — Administrator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/login.css">
+  <link rel="stylesheet" href="/elisa-theme.css?v=20260724-1">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="intro">
+      <div class="brand"><span>VF</span> VM Foundry</div>
+      <div><p class="eyebrow">LOCAL ADMINISTRATION</p><h1>Approvals.<br>In one place.</h1><p>Review virtual machine requests awaiting administrator approval and approve or reject them.</p></div>
+      <small>Local administrator · Independent of LDAP</small>
+    </section>
+    <section class="login-panel">
+      <form id="adminLoginForm">
+        <p class="eyebrow">ADMINISTRATOR</p>
+        <h2>Administrator sign in</h2>
+        <p class="muted">Use the local administrator account.</p>
+        <label>Username<input name="username" autocomplete="username" autofocus required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <div id="loginError" class="error hidden"></div>
+        <button type="submit">Sign in <span>→</span></button>
+        <p class="help"><a href="/login.html">Back to LDAP sign in</a></p>
+      </form>
+    </section>
+  </main>
+  <script src="/admin-login.js?v=20260806-1"></script>
+</body>
+</html>

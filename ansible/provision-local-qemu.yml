@@ -1,0 +1,244 @@
+---
+- name: Provision a local QEMU virtual machine
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Validate portal input
+      ansible.builtin.assert:
+        that:
+          - vm_name is match('^[a-z0-9][a-z0-9-]{0,62}$')
+          - (vm_vcpu | int) > 0
+          - (vm_memory_mb | int) > 0
+          - (vm_disk_gb | int) > 0
+          - base_image is file
+          - cloud_init_template is file
+          - ssh_login_user is match('^[a-z_][a-z0-9_-]{0,31}$')
+          - ssh_public_key is match('^(ssh-|ecdsa-|sk-).+')
+          - additional_disks is iterable
+          - (additional_disks | length) <= 20
+        fail_msg: Invalid local QEMU request received from the portal
+
+    - name: Check whether VM already exists
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ libvirt_uri }}", dominfo, "{{ vm_name }}"]
+      register: existing_vm
+      changed_when: false
+      failed_when: false
+
+    - name: Create VM files and libvirt domain
+      when: existing_vm.rc != 0
+      block:
+        - name: Create VM storage directory
+          ansible.builtin.file:
+            path: "{{ storage_path }}"
+            state: directory
+            mode: "0775"
+
+        - name: Create thin qcow2 overlay from cloud image
+          ansible.builtin.command:
+            argv:
+              - qemu-img
+              - create
+              - -f
+              - qcow2
+              - -F
+              - qcow2
+              - -b
+              - "{{ base_image }}"
+              - "{{ storage_path }}/{{ vm_name }}.qcow2"
+              - "{{ vm_disk_gb | int }}G"
+          args:
+            creates: "{{ storage_path }}/{{ vm_name }}.qcow2"
+
+        - name: Create requested LVM data disks
+          ansible.builtin.command:
+            argv:
+              - qemu-img
+              - create
+              - -f
+              - qcow2
+              - "{{ storage_path }}/{{ item.storage_file }}"
+              - "{{ item.size_gb | int }}G"
+          args:
+            creates: "{{ storage_path }}/{{ item.storage_file }}"
+          loop: "{{ additional_disks }}"
+          loop_control:
+            label: "{{ item.mountpoint }}"
+
+        - name: Copy configured cloud-init user data template
+          ansible.builtin.copy:
+            src: "{{ cloud_init_template }}"
+            dest: "{{ storage_path }}/{{ vm_name }}-user-data.yml"
+            mode: "0644"
+
+        - name: Set requested hostname in cloud-init user data
+          ansible.builtin.replace:
+            path: "{{ storage_path }}/{{ vm_name }}-user-data.yml"
+            regexp: HOSTNAME
+            replace: "{{ vm_name }}"
+
+        - name: Install selected SSH public key in cloud-init user data
+          ansible.builtin.command:
+            argv:
+              - python3
+              - /app/ansible/set-cloud-init-ssh-key.py
+              - "{{ storage_path }}/{{ vm_name }}-user-data.yml"
+              - "{{ ssh_login_user }}"
+              - "{{ ssh_public_key }}"
+          changed_when: true
+
+        - name: Add LVM root expansion and optional LVM data disk configuration
+          ansible.builtin.blockinfile:
+            path: "{{ storage_path }}/{{ vm_name }}-user-data.yml"
+            marker: "# {mark} VM FOUNDRY LVM STORAGE"
+            block: |
+              packages:
+                - cloud-guest-utils
+                - lvm2
+                - qemu-guest-agent
+              growpart:
+                mode: auto
+                devices: ['/']
+                ignore_growroot_disabled: false
+              resize_rootfs: false
+              write_files:
+                - path: /var/lib/cloud/scripts/per-instance/99-vm-foundry-storage
+                  permissions: '0750'
+                  content: |
+                    #!/bin/bash
+                    set -euo pipefail
+              {% for disk in additional_disks %}
+                    if ! pvs /dev/{{ disk.target }} >/dev/null 2>&1; then
+                      pvcreate /dev/{{ disk.target }}
+                      vgcreate {{ disk.vg_name }} /dev/{{ disk.target }}
+                      lvcreate -n {{ disk.lv_name }} -l 100%FREE {{ disk.vg_name }}
+                      mkfs.ext4 -F /dev/{{ disk.vg_name }}/{{ disk.lv_name }}
+                    fi
+                    install -d -m 0755 {{ disk.mountpoint | quote }}
+                    uuid=$(blkid -s UUID -o value /dev/{{ disk.vg_name }}/{{ disk.lv_name }})
+                    grep -q "UUID=$uuid " /etc/fstab || echo "UUID=$uuid {{ disk.mountpoint }} ext4 defaults,nofail 0 2" >> /etc/fstab
+                    mountpoint -q {{ disk.mountpoint | quote }} || mount {{ disk.mountpoint | quote }}
+              {% endfor %}
+                    root_source=$(findmnt -n -o SOURCE /)
+                    if ! lvs "$root_source" >/dev/null 2>&1; then
+                      echo "Root filesystem is not LVM-backed" >&2
+                      exit 1
+                    fi
+                    root_vg=$(lvs --noheadings -o vg_name "$root_source" | xargs)
+                    while read -r root_pv; do
+                      [[ -n "$root_pv" ]] || continue
+                      root_parent=$(lsblk -ndo PKNAME "$root_pv" | xargs)
+                      root_partnum=$(cat "/sys/class/block/$(basename "$root_pv")/partition" 2>/dev/null || true)
+                      if [[ -n "$root_parent" && -n "$root_partnum" ]]; then
+                        growpart "/dev/$root_parent" "$root_partnum"
+                      fi
+                      pvresize "$root_pv"
+                    done < <(pvs --noheadings -o pv_name --select "vg_name=$root_vg" | xargs -n1)
+                    lvextend -r -l +100%FREE "$root_source"
+
+        - name: Write cloud-init metadata
+          ansible.builtin.copy:
+            dest: "{{ storage_path }}/{{ vm_name }}-meta-data.yml"
+            mode: "0644"
+            content: |
+              instance-id: "{{ vm_name }}"
+              local-hostname: "{{ vm_name }}"
+
+        - name: Create cloud-init NoCloud seed image
+          ansible.builtin.command:
+            argv:
+              - xorrisofs
+              - -output
+              - "{{ storage_path }}/{{ vm_name }}-seed.img"
+              - -volid
+              - cidata
+              - -joliet
+              - -rock
+              - -graft-points
+              - "user-data={{ storage_path }}/{{ vm_name }}-user-data.yml"
+              - "meta-data={{ storage_path }}/{{ vm_name }}-meta-data.yml"
+          args:
+            creates: "{{ storage_path }}/{{ vm_name }}-seed.img"
+
+        - name: Write libvirt domain definition
+          ansible.builtin.copy:
+            dest: "{{ storage_path }}/{{ vm_name }}.xml"
+            mode: "0644"
+            content: |
+              <domain type='kvm'>
+                <name>{{ vm_name }}</name>
+                <maxMemory slots='8' unit='MiB'>{{ [vm_memory_mb | int, 32768] | max }}</maxMemory>
+                <memory unit='MiB'>{{ vm_memory_mb | int }}</memory>
+                <currentMemory unit='MiB'>{{ vm_memory_mb | int }}</currentMemory>
+                <vcpu placement='static' current='{{ vm_vcpu | int }}'>32</vcpu>
+                <os>
+                  <type arch='x86_64' machine='q35'>hvm</type>
+                  <boot dev='hd'/>
+                </os>
+                <features><acpi/><apic/></features>
+                <cpu mode='host-model' check='partial'/>
+                <clock offset='utc'/>
+                <on_poweroff>destroy</on_poweroff>
+                <on_reboot>restart</on_reboot>
+                <on_crash>restart</on_crash>
+                <devices>
+                  <emulator>/usr/bin/qemu-system-x86_64</emulator>
+                  <disk type='file' device='disk'>
+                    <driver name='qemu' type='qcow2'/>
+                    <source file='{{ storage_path }}/{{ vm_name }}.qcow2'/>
+                    <target dev='vda' bus='virtio'/>
+                  </disk>
+                  {% for disk in additional_disks %}
+                  <disk type='file' device='disk'>
+                    <driver name='qemu' type='qcow2'/>
+                    <source file='{{ storage_path }}/{{ disk.storage_file }}'/>
+                    <target dev='{{ disk.target }}' bus='virtio'/>
+                  </disk>
+                  {% endfor %}
+                  <disk type='file' device='cdrom'>
+                    <driver name='qemu' type='raw'/>
+                    <source file='{{ storage_path }}/{{ vm_name }}-seed.img'/>
+                    <target dev='sda' bus='sata'/>
+                    <readonly/>
+                  </disk>
+                  <interface type='network'>
+                    <source network='{{ libvirt_network }}'/>
+                    <model type='virtio'/>
+                  </interface>
+                  <graphics type='spice' autoport='yes'>
+                    <listen type='address'/>
+                  </graphics>
+                  <video>
+                    <model type='virtio' heads='1' primary='yes'/>
+                  </video>
+                  <channel type='spicevmc'>
+                    <target type='virtio' name='com.redhat.spice.0'/>
+                  </channel>
+                  <channel type='unix'>
+                    <target type='virtio' name='org.qemu.guest_agent.0'/>
+                  </channel>
+                  <serial type='pty'><target type='isa-serial' port='0'/></serial>
+                  <console type='pty'><target type='serial' port='0'/></console>
+                  <memballoon model='virtio'/>
+                </devices>
+              </domain>
+
+        - name: Define local QEMU domain
+          ansible.builtin.command:
+            argv: [virsh, --connect, "{{ libvirt_uri }}", define, "{{ storage_path }}/{{ vm_name }}.xml"]
+
+        - name: Start local QEMU domain
+          ansible.builtin.command:
+            argv: [virsh, --connect, "{{ libvirt_uri }}", start, "{{ vm_name }}"]
+
+    - name: Read resulting VM definition
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ libvirt_uri }}", dominfo, "{{ vm_name }}"]
+      register: vm_info
+      changed_when: false
+
+    - name: Report local QEMU VM
+      ansible.builtin.debug:
+        msg: "{{ vm_info.stdout_lines }}"

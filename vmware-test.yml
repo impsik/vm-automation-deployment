@@ -1,0 +1,310 @@
+---
+- name: Inspect VMware vcsim environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # vcsim connection
+    vcenter_hostname: "127.0.0.1"
+    vcenter_port: 8989
+    vcenter_username: "admin"
+    vcenter_password: "test-password"
+    vcenter_validate_certs: false
+
+  tasks:
+    - name: Check connection and gather vCenter information
+      community.vmware.vmware_about_info:
+        hostname: "{{ vcenter_hostname }}"
+        port: "{{ vcenter_port }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: vcenter_about
+
+    - name: Show vCenter information
+      ansible.builtin.debug:
+        msg:
+          api_type: "{{ vcenter_about.about_info.api_type | default('unknown') }}"
+          api_version: "{{ vcenter_about.about_info.api_version | default('unknown') }}"
+          build: "{{ vcenter_about.about_info.build | default('unknown') }}"
+          full_name: "{{ vcenter_about.about_info.full_name | default('unknown') }}"
+
+    - name: Gather datacenter information
+      community.vmware.vmware_datacenter_info:
+        hostname: "{{ vcenter_hostname }}"
+        port: "{{ vcenter_port }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: datacenter_info
+
+    - name: Verify that at least one datacenter was found
+      ansible.builtin.assert:
+        that:
+          - datacenter_info.datacenter_info is defined
+          - datacenter_info.datacenter_info | length > 0
+        fail_msg: "No datacenters were found in vcsim."
+        success_msg: >-
+          Found {{ datacenter_info.datacenter_info | length }}
+          datacenter(s).
+
+    - name: Create datacenter name list
+      ansible.builtin.set_fact:
+        datacenter_names: >-
+          {{
+            datacenter_info.datacenter_info
+            | map(attribute='name')
+            | list
+          }}
+
+    - name: Show datacenters
+      ansible.builtin.debug:
+        var: datacenter_names
+
+    - name: Gather cluster information from each datacenter
+      community.vmware.vmware_cluster_info:
+        hostname: "{{ vcenter_hostname }}"
+        port: "{{ vcenter_port }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        datacenter: "{{ item.name }}"
+      loop: "{{ datacenter_info.datacenter_info }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: cluster_info
+      failed_when: false
+
+    - name: Show cluster query errors
+      ansible.builtin.debug:
+        msg:
+          datacenter: "{{ item.item.name }}"
+          error: "{{ item.msg }}"
+      loop: "{{ cluster_info.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.failed | default(false)
+
+    - name: Show clusters by datacenter
+      ansible.builtin.debug:
+        msg:
+          datacenter: "{{ item.item.name }}"
+          clusters: "{{ item.clusters | default({}) }}"
+      loop: "{{ cluster_info.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: not (item.failed | default(false))
+
+    - name: Initialize cluster summary
+      ansible.builtin.set_fact:
+        clusters_by_datacenter: {}
+
+    - name: Build cluster summary by datacenter
+      ansible.builtin.set_fact:
+        clusters_by_datacenter: >-
+          {{
+            clusters_by_datacenter
+            | combine({
+                item.item.name: (
+                  item.clusters
+                  | default({})
+                  | dict2items
+                  | map(attribute='key')
+                  | list
+                )
+              })
+          }}
+      loop: "{{ cluster_info.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when:
+        - not (item.failed | default(false))
+        - item.clusters is defined
+        - item.clusters is mapping
+
+    - name: Show cluster names by datacenter
+      ansible.builtin.debug:
+        var: clusters_by_datacenter
+
+    - name: Gather datastore information
+      community.vmware.vmware_datastore_info:
+        hostname: "{{ vcenter_hostname }}"
+        port: "{{ vcenter_port }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: datastore_info
+      failed_when: false
+
+    - name: Show datastore query error
+      ansible.builtin.debug:
+        msg: "{{ datastore_info.msg }}"
+      when: datastore_info.failed | default(false)
+
+    - name: Show datastore summary
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            datastore_info.datastores
+            | default([])
+            | map(attribute='name')
+            | list
+          }}
+      when: not (datastore_info.failed | default(false))
+
+    - name: Show datastore capacity information
+      ansible.builtin.debug:
+        msg:
+          name: "{{ item.name | default('unknown') }}"
+          capacity_gb: >-
+            {{
+              (
+                item.capacity
+                | default(0)
+                | int
+                / 1024
+                / 1024
+                / 1024
+              )
+              | round(2)
+            }}
+          free_space_gb: >-
+            {{
+              (
+                item.freeSpace
+                | default(item.free_space | default(0))
+                | int
+                / 1024
+                / 1024
+                / 1024
+              )
+              | round(2)
+            }}
+      loop: "{{ datastore_info.datastores | default([]) }}"
+      loop_control:
+        label: "{{ item.name | default('unknown') }}"
+      when: not (datastore_info.failed | default(false))
+
+    - name: Gather standard port group information
+      community.vmware.vmware_portgroup_info:
+        hostname: "{{ vcenter_hostname }}"
+        port: "{{ vcenter_port }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: portgroup_info
+      failed_when: false
+
+    - name: Show port group query error
+      ansible.builtin.debug:
+        msg: "{{ portgroup_info.msg }}"
+      when: portgroup_info.failed | default(false)
+
+    - name: Show standard port group information
+      ansible.builtin.debug:
+        var: portgroup_info
+      when: not (portgroup_info.failed | default(false))
+
+    - name: Gather virtual machine information
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vcenter_hostname }}"
+        port: "{{ vcenter_port }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+        show_allocated: true
+        show_cluster: true
+        show_datacenter: true
+        show_datastore: true
+        show_esxi_hostname: true
+        show_folder: true
+        show_net: true
+        show_resource_pool: true
+      register: vm_info
+      failed_when: false
+
+    - name: Show virtual machine query error
+      ansible.builtin.debug:
+        msg: "{{ vm_info.msg }}"
+      when: vm_info.failed | default(false)
+
+    - name: Show virtual machine names
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            vm_info.virtual_machines
+            | default([])
+            | map(attribute='guest_name')
+            | list
+          }}
+      when: not (vm_info.failed | default(false))
+
+    - name: Show virtual machine summary
+      ansible.builtin.debug:
+        msg:
+          name: "{{ item.guest_name | default(item.name | default('unknown')) }}"
+          datacenter: "{{ item.datacenter | default('unknown') }}"
+          cluster: "{{ item.cluster | default('unknown') }}"
+          esxi_host: "{{ item.esxi_hostname | default('unknown') }}"
+          datastore: "{{ item.datastore_url | default(item.datastore | default([])) }}"
+          power_state: "{{ item.power_state | default('unknown') }}"
+          cpu: "{{ item.cpu_count | default('unknown') }}"
+          memory_mb: "{{ item.memory_mb | default('unknown') }}"
+          ip_address: "{{ item.ip_address | default('unknown') }}"
+      loop: "{{ vm_info.virtual_machines | default([]) }}"
+      loop_control:
+        label: >-
+          {{
+            item.guest_name
+            | default(item.name | default('unknown'))
+          }}
+      when: not (vm_info.failed | default(false))
+
+    # vcsim does not fully populate the PropertyCollector response used by
+    # vmware_vm_info. govc uses a simulator-compatible inventory traversal and
+    # provides a reliable PoC verification path for portal-created VMs.
+    - name: Gather vcsim virtual machines with govc
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - exec
+          - -T
+          - portal
+          - sh
+          - -lc
+          - >-
+            GOVC_URL=https://admin:test-password@vcsim:8989
+            GOVC_INSECURE=1 govc find / -type m
+      args:
+        chdir: "{{ playbook_dir }}"
+      register: vcsim_govc_vms
+      changed_when: false
+
+    - name: Show vcsim VM inventory paths
+      ansible.builtin.debug:
+        var: vcsim_govc_vms.stdout_lines
+
+    - name: Show final vcsim inventory summary
+      ansible.builtin.debug:
+        msg:
+          datacenter_count: "{{ datacenter_names | length }}"
+          datacenters: "{{ datacenter_names }}"
+          clusters_by_datacenter: "{{ clusters_by_datacenter }}"
+          datastore_count: >-
+            {{
+              datastore_info.datastores
+              | default([])
+              | length
+            }}
+          virtual_machine_count: >-
+            {{
+              vcsim_govc_vms.stdout_lines
+              | default([])
+              | length
+            }}
+          portgroup_query_successful: >-
+            {{
+              not (portgroup_info.failed | default(false))
+            }}

@@ -1,0 +1,65 @@
+---
+- name: Provision a virtual machine in VMware vcsim
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    vcenter_hostname: "{{ lookup('env', 'VCENTER_HOST') | default('127.0.0.1', true) }}"
+    vcenter_port: "{{ lookup('env', 'VCENTER_PORT') | default('8989', true) | int }}"
+    vcenter_username: "{{ lookup('env', 'VCENTER_USERNAME') | default('admin', true) }}"
+    vcenter_password: "{{ lookup('env', 'VCENTER_PASSWORD') | default('test-password', true) }}"
+    vcenter_validate_certs: false
+    vm_datacenter: "{{ datacenter | default('DC0') }}"
+    vm_datastore: "{{ datastore | default('LocalDS_0') }}"
+    vm_resource_pool: "{{ resource_pool | default('/DC0/host/DC0_C0/Resources') }}"
+    vm_network: "{{ network_name | default('VM Network') }}"
+
+  tasks:
+    - name: Validate portal input
+      ansible.builtin.assert:
+        that:
+          - vm_name is match('^[a-z0-9][a-z0-9-]{0,62}$')
+          - (vm_vcpu | int) > 0
+          - (vm_memory_mb | int) > 0
+          - (vm_disk_gb | int) > 0
+        fail_msg: Invalid VM request received from the portal
+
+    - name: Check whether VM already exists
+      ansible.builtin.command:
+        argv: [govc, vm.info, "{{ vm_name }}"]
+      environment:
+        GOVC_URL: "https://{{ vcenter_username }}:{{ vcenter_password }}@{{ vcenter_hostname }}:{{ vcenter_port }}"
+        GOVC_INSECURE: "1"
+        GOVC_DATACENTER: "{{ vm_datacenter }}"
+      register: existing_vm
+      changed_when: false
+      failed_when: false
+
+    - name: Create virtual machine in vcsim
+      ansible.builtin.command:
+        argv:
+          - govc
+          - vm.create
+          - -on=false
+          - "-c={{ vm_vcpu | int }}"
+          - "-m={{ vm_memory_mb | int }}"
+          - "-disk={{ vm_disk_gb | int }}GB"
+          - "-ds={{ vm_datastore }}"
+          - "-pool={{ vm_resource_pool }}"
+          - "-net={{ vm_network }}"
+          - "{{ vm_name }}"
+      environment:
+        GOVC_URL: "https://{{ vcenter_username }}:{{ vcenter_password }}@{{ vcenter_hostname }}:{{ vcenter_port }}"
+        GOVC_INSECURE: "1"
+        GOVC_DATACENTER: "{{ vm_datacenter }}"
+      register: provisioned_vm
+      when: existing_vm.rc != 0 or (existing_vm.stdout | trim | length == 0)
+
+    - name: Report provisioned VM
+      ansible.builtin.debug:
+        msg:
+          name: "{{ vm_name }}"
+          datacenter: "{{ vm_datacenter }}"
+          datastore: "{{ vm_datastore }}"
+          changed: "{{ provisioned_vm.changed | default(false) }}"

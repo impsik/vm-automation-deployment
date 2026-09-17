@@ -1,0 +1,315 @@
+---
+- name: Resize an existing local QEMU virtual machine online
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    qemu_uri: "{{ libvirt_uri | default('qemu:///system') }}"
+    guest_resize_script: |
+      set -euo pipefail
+      grow_mount() {
+        mountpoint=$1
+        source=$(findmnt -n -o SOURCE --target "$mountpoint")
+        fstype=$(findmnt -n -o FSTYPE --target "$mountpoint")
+        if lvs "$source" >/dev/null 2>&1; then
+          vg=$(lvs --noheadings -o vg_name "$source" | xargs)
+          while read -r pv; do
+            [ -n "$pv" ] || continue
+            parent=$(lsblk -ndo PKNAME "$pv" | xargs)
+            partnum=$(cat "/sys/class/block/$(basename "$pv")/partition" 2>/dev/null || true)
+            if [ -n "$parent" ] && [ -n "$partnum" ]; then
+              blockdev --rereadpt "/dev/$parent" 2>/dev/null || true
+              growpart "/dev/$parent" "$partnum"
+            fi
+            pvresize "$pv"
+          done < <(pvs --noheadings -o pv_name --select "vg_name=$vg" | xargs -n1)
+          lvextend -r -l +100%FREE "$source"
+        else
+          parent=$(lsblk -ndo PKNAME "$source" | xargs)
+          partnum=$(cat "/sys/class/block/$(basename "$source")/partition" 2>/dev/null || true)
+          if [ -z "$parent" ] || [ -z "$partnum" ]; then
+            echo "$mountpoint is neither LVM-backed nor on a resizable partition" >&2
+            exit 1
+          fi
+          growpart "/dev/$parent" "$partnum"
+          case "$fstype" in
+            ext2|ext3|ext4) resize2fs "$source" ;;
+            xfs) xfs_growfs "$mountpoint" ;;
+            *) echo "Unsupported filesystem at $mountpoint: $fstype" >&2; exit 1 ;;
+          esac
+        fi
+        findmnt -n -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL --target "$mountpoint"
+      }
+      for mountpoint in "$@"; do
+        grow_mount "$mountpoint"
+      done
+
+  tasks:
+    - name: Validate resize request
+      ansible.builtin.assert:
+        that:
+          - vm_name is match('^[a-z0-9][a-z0-9-]{0,62}$')
+          - (vm_vcpu | int) > 0
+          - (vm_memory_mb | int) > 0
+          - (vm_disk_gb | int) > 0
+          - data_disks is iterable
+        fail_msg: Invalid VM resize request
+
+    - name: Validate data disk resize entries
+      ansible.builtin.assert:
+        that:
+          - item.target is match('^vd[b-u]$')
+          - (item.size_gb | int) > 0
+          - item.mountpoint is match('^/')
+        fail_msg: Invalid data disk resize entry
+      loop: "{{ data_disks }}"
+      loop_control:
+        label: "{{ item.mountpoint | default('unknown') }}"
+
+    - name: Calculate disk resize flags
+      ansible.builtin.set_fact:
+        resized_data_disks: "{{ data_disks | selectattr('resize', 'equalto', true) | list }}"
+        any_disk_resize: >-
+          {{ (resize_guest_disk | bool) or
+             ((data_disks | selectattr('resize', 'equalto', true) | list | length) > 0) }}
+
+    - name: Read current domain information
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", dominfo, "{{ vm_name }}"]
+      register: domain_info
+      changed_when: false
+
+    - name: Require a running virtual machine
+      ansible.builtin.assert:
+        that:
+          - domain_info.stdout is search('State:\s+running')
+        fail_msg: The VM must be running for a restart-free resize
+
+    - name: Read current OS disk information
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", domblkinfo, "{{ vm_name }}", vda]
+      register: disk_info
+      changed_when: false
+
+    - name: Read configured maximum vCPU count
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", vcpucount, "{{ vm_name }}", --maximum, --config]
+      register: maximum_vcpu
+      changed_when: false
+
+    - name: Read persistent domain XML
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", dumpxml, "{{ vm_name }}", --inactive]
+      register: domain_xml
+      changed_when: false
+
+    - name: Verify QEMU guest agent before changing resources
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - qemu-agent-command
+          - "{{ vm_name }}"
+          - '{"execute":"guest-ping"}'
+          - --timeout
+          - '5'
+      changed_when: false
+
+    - name: Read guest CPU state before changing resources
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", qemu-agent-command, "{{ vm_name }}", '{"execute":"guest-get-vcpus"}', --timeout, '5']
+      register: initial_guest_cpus
+      changed_when: false
+
+    - name: Reject requests that would offline guest CPUs
+      ansible.builtin.assert:
+        that:
+          - ((initial_guest_cpus.stdout | from_json)['return'] | selectattr('online', 'equalto', true) | list | length) <= (vm_vcpu | int)
+        fail_msg: The requested CPU count must not disable CPUs already online in the guest
+
+    - name: Calculate current resource values
+      ansible.builtin.set_fact:
+        current_vcpu: "{{ (domain_info.stdout | regex_search('CPU\\(s\\):\\s+(\\d+)', '\\1') | first) | int }}"
+        current_memory_kib: "{{ (domain_info.stdout | regex_search('Used memory:\\s+(\\d+) KiB', '\\1') | first) | int }}"
+        maximum_memory_matches: >-
+          {{ domain_xml.stdout |
+             regex_findall("<maxMemory[^>]*unit='KiB'>([0-9]+)</maxMemory>") }}
+        current_disk_bytes: "{{ (disk_info.stdout | regex_search('Capacity:\\s+(\\d+)', '\\1') | first) | int }}"
+
+    - name: Resolve memory hot-add limit
+      ansible.builtin.set_fact:
+        maximum_memory_kib: >-
+          {{ (maximum_memory_matches | first | int)
+             if (maximum_memory_matches | length)
+             else (current_memory_kib | int) }}
+
+    - name: Allow supported live increases only
+      ansible.builtin.assert:
+        that:
+          - (vm_vcpu | int) >= (current_vcpu | int)
+          - (vm_vcpu | int) <= (maximum_vcpu.stdout | trim | int)
+          - (vm_memory_mb | int * 1024) >= (current_memory_kib | int)
+          - (vm_memory_mb | int * 1024) <= (maximum_memory_kib | int)
+          - (vm_disk_gb | int * 1073741824) >= (current_disk_bytes | int)
+        fail_msg: >-
+          Online resize only permits increases within the VM's configured live
+          vCPU and memory hot-add limits
+
+    - name: Increase active and persistent vCPU count
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - setvcpus
+          - "{{ vm_name }}"
+          - "{{ vm_vcpu | int }}"
+          - --live
+          - --config
+      when: (vm_vcpu | int) > (current_vcpu | int)
+
+    - name: Wait for hot-added CPUs to appear in the guest
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", qemu-agent-command, "{{ vm_name }}", '{"execute":"guest-get-vcpus"}', --timeout, '5']
+      register: present_guest_cpus
+      changed_when: false
+      until: >-
+        present_guest_cpus.rc == 0 and
+        (((present_guest_cpus.stdout | from_json)['return'] | length) >= (vm_vcpu | int))
+      retries: 10
+      delay: 1
+
+    - name: Activate requested CPUs inside the guest including on retry
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", setvcpus, "{{ vm_name }}", "{{ vm_vcpu | int }}", --guest]
+      when: >-
+        ((present_guest_cpus.stdout | from_json)['return'] |
+         selectattr('online', 'equalto', true) | list | length) < (vm_vcpu | int)
+
+    - name: Verify the requested CPUs are online inside the guest
+      ansible.builtin.command:
+        argv: [virsh, --connect, "{{ qemu_uri }}", qemu-agent-command, "{{ vm_name }}", '{"execute":"guest-get-vcpus"}', --timeout, '5']
+      register: verified_guest_cpus
+      changed_when: false
+      until: >-
+        verified_guest_cpus.rc == 0 and
+        (((verified_guest_cpus.stdout | from_json)['return'] |
+          selectattr('online', 'equalto', true) | list | length) == (vm_vcpu | int))
+      retries: 10
+      delay: 1
+
+    - name: Write persistent DIMM hot-add definition
+      ansible.builtin.copy:
+        dest: "{{ storage_path }}/{{ vm_name }}-memory-{{ vm_memory_mb | int }}MiB.xml"
+        mode: "0644"
+        content: |
+          <memory model='dimm'>
+            <target>
+              <size unit='MiB'>{{ (vm_memory_mb | int) - ((current_memory_kib | int) // 1024) }}</size>
+              <node>0</node>
+            </target>
+          </memory>
+      when: (vm_memory_mb | int * 1024) > (current_memory_kib | int)
+
+    - name: Hot-add memory to the active and persistent domain
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - attach-device
+          - "{{ vm_name }}"
+          - "{{ storage_path }}/{{ vm_name }}-memory-{{ vm_memory_mb | int }}MiB.xml"
+          - --live
+          - --config
+      when: (vm_memory_mb | int * 1024) > (current_memory_kib | int)
+
+    - name: Increase active OS disk
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - blockresize
+          - "{{ vm_name }}"
+          - vda
+          - "{{ vm_disk_gb | int }}G"
+      when: resize_guest_disk | bool
+
+    - name: Increase active data disks
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - blockresize
+          - "{{ vm_name }}"
+          - "{{ item.target }}"
+          - "{{ item.size_gb | int }}G"
+      loop: "{{ resized_data_disks }}"
+      loop_control:
+        label: "{{ item.mountpoint }} ({{ item.target }})"
+
+    - name: Start guest resize command through QEMU guest agent
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - qemu-agent-command
+          - "{{ vm_name }}"
+          - >-
+            {{ {'execute': 'guest-exec',
+                'arguments': {
+                  'path': '/bin/bash',
+                  'arg': ['-c', guest_resize_script, 'vm-foundry-resize']
+                    + (['/'] if (resize_guest_disk | bool) else [])
+                    + (resized_data_disks | map(attribute='mountpoint') | list),
+                  'capture-output': true
+                }} | to_json }}
+      register: guest_exec
+      changed_when: true
+      when: any_disk_resize | bool
+
+    - name: Save guest command process id
+      ansible.builtin.set_fact:
+        guest_exec_pid: "{{ (guest_exec.stdout | from_json).return.pid }}"
+      when: any_disk_resize | bool
+
+    - name: Wait for guest filesystem resize
+      ansible.builtin.command:
+        argv:
+          - virsh
+          - --connect
+          - "{{ qemu_uri }}"
+          - qemu-agent-command
+          - "{{ vm_name }}"
+          - "{{ {'execute': 'guest-exec-status', 'arguments': {'pid': guest_exec_pid | int}} | to_json }}"
+      register: guest_exec_status
+      changed_when: false
+      until: (guest_exec_status.stdout | from_json).return.exited | default(false)
+      retries: 30
+      delay: 2
+      when: any_disk_resize | bool
+
+    - name: Require successful guest filesystem resize
+      ansible.builtin.assert:
+        that:
+          - ((guest_exec_status.stdout | from_json).return.exitcode | int) == 0
+        fail_msg: >-
+          Guest filesystem resize failed:
+          {{ ((guest_exec_status.stdout | from_json).return['err-data'] | default('') | b64decode) }}
+      when: any_disk_resize | bool
+
+    - name: Report resized resources
+      ansible.builtin.debug:
+        msg:
+          name: "{{ vm_name }}"
+          vcpu: "{{ vm_vcpu | int }}"
+          guest_online_vcpu: "{{ (verified_guest_cpus.stdout | from_json)['return'] | selectattr('online', 'equalto', true) | list | length }}"
+          memory_mb: "{{ vm_memory_mb | int }}"
+          disk_gb: "{{ vm_disk_gb | int }}"
+          data_disks: "{{ data_disks }}"
+          rebooted: false
