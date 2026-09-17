@@ -7,7 +7,8 @@ and simulates phpIPAM, NetBox and Nagios workflow steps. VMware inventory inspec
 
 ## Quick install
 
-On a Linux host with Docker Engine and Docker Compose v2 installed:
+On a supported Linux host, the installer installs Docker Engine and Docker
+Compose when they are missing:
 
 ```bash
 git clone https://github.com/impsik/vm-automation-deployment.git
@@ -19,6 +20,10 @@ The installer asks for the local administrator password, creates the required
 `.env` file with a PBKDF2-SHA256 hash, prepares the self-contained VMware vcsim
 demo backend and starts the portal. Open <http://localhost:8080> afterwards.
 Run `./install.sh --no-start` if you only want to prepare the configuration.
+
+The installer supports Debian/Ubuntu, Fedora/RHEL-compatible systems, Arch,
+openSUSE and Alpine. It may ask for the `sudo` password to install system
+packages and start Docker.
 
 The generated `.env` and `.runtime/` directory are local-only and are ignored
 by Git. Advanced deployments using the local QEMU backend can continue to use

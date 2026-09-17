@@ -7,6 +7,9 @@ readonly ENV_FILE="$SCRIPT_DIR/.env"
 readonly RUNTIME_DIR="$SCRIPT_DIR/.runtime"
 readonly RUNTIME_CONFIG="$RUNTIME_DIR/config.yml"
 
+DOCKER=(docker)
+COMPOSE=(docker compose)
+
 usage() {
     cat <<'EOF'
 Usage: ./install.sh [--no-start]
@@ -14,7 +17,7 @@ Usage: ./install.sh [--no-start]
 Prepare and start the VM Foundry self-service portal.
 
 The installer:
-  - checks Docker Compose;
+  - installs Docker Engine and Docker Compose when missing;
   - creates .env with a local administrator account;
   - generates a PBKDF2-SHA256 password hash;
   - prepares a self-contained VMware vcsim demo configuration;
@@ -37,6 +40,133 @@ log() {
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+run_as_root() {
+    if [[ "$EUID" -eq 0 ]]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        die "Installing system packages requires root or sudo access"
+    fi
+}
+
+run_docker() {
+    "${DOCKER[@]}" "$@"
+}
+
+run_compose() {
+    "${COMPOSE[@]}" "$@"
+}
+
+apt_has_candidate() {
+    apt-cache policy "$1" 2>/dev/null \
+        | awk '$1 == "Candidate:" && $2 != "(none)" { found = 1 } END { exit !found }'
+}
+
+install_docker_packages() {
+    local distro_id
+    distro_id="$(. /etc/os-release; printf '%s' "${ID:-}")"
+
+    log "Installing Docker dependencies"
+    case "$distro_id" in
+        debian|ubuntu|linuxmint|pop)
+            run_as_root apt-get update
+            apt_has_candidate docker.io || die "Docker package is unavailable in the configured APT repositories"
+            run_as_root apt-get install -y docker.io
+
+            if ! docker compose version >/dev/null 2>&1 && ! docker-compose version >/dev/null 2>&1; then
+                if apt_has_candidate docker-compose-plugin; then
+                    run_as_root apt-get install -y docker-compose-plugin
+                elif apt_has_candidate docker-compose-v2; then
+                    run_as_root apt-get install -y docker-compose-v2
+                elif apt_has_candidate docker-compose; then
+                    run_as_root apt-get install -y docker-compose
+                else
+                    die "Docker Compose package is unavailable in the configured APT repositories"
+                fi
+            fi
+            ;;
+        fedora)
+            run_as_root dnf install -y docker docker-compose-plugin
+            ;;
+        rhel|rocky|almalinux|centos)
+            if command -v dnf >/dev/null 2>&1; then
+                run_as_root dnf install -y docker docker-compose-plugin
+            else
+                run_as_root yum install -y docker docker-compose-plugin
+            fi
+            ;;
+        arch|manjaro)
+            run_as_root pacman -Sy --needed --noconfirm docker docker-compose
+            ;;
+        opensuse*|sles)
+            run_as_root zypper --non-interactive install docker docker-compose
+            ;;
+        alpine)
+            run_as_root apk add docker docker-cli-compose
+            ;;
+        *)
+            die "Unsupported Linux distribution '$distro_id'. Install Docker Engine and Docker Compose manually."
+            ;;
+    esac
+}
+
+ensure_docker() {
+    local compose_as_docker=false
+    local target_user="${SUDO_USER:-${USER:-}}"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        install_docker_packages
+    elif docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1; then
+        :
+    else
+        install_docker_packages
+    fi
+
+    command -v docker >/dev/null 2>&1 || die "Docker installation did not provide the docker command"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        run_as_root systemctl enable --now docker >/dev/null 2>&1 || true
+    elif command -v service >/dev/null 2>&1; then
+        run_as_root service docker start >/dev/null 2>&1 || true
+    fi
+
+    if [[ -n "$target_user" ]] && getent group docker >/dev/null 2>&1; then
+        if ! id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -Fxq docker; then
+            run_as_root usermod -aG docker "$target_user"
+            printf '%s was added to the docker group; a new login is required for direct Docker access.\n' "$target_user"
+        fi
+    fi
+
+    if docker info >/dev/null 2>&1; then
+        DOCKER=(docker)
+    elif command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+        DOCKER=(sudo docker)
+        printf 'Docker is available through sudo until you log in again after the group change.\n'
+    else
+        die "Docker is installed but the daemon is not running or the current user cannot access it"
+    fi
+
+    if run_docker compose version >/dev/null 2>&1; then
+        COMPOSE=("${DOCKER[@]}" compose)
+        compose_as_docker=true
+    elif command -v docker-compose >/dev/null 2>&1; then
+        if [[ "${DOCKER[0]}" == "sudo" ]]; then
+            COMPOSE=(sudo docker-compose)
+        else
+            COMPOSE=(docker-compose)
+        fi
+    else
+        die "Docker Compose is not available after installation"
+    fi
+
+    if [[ "$compose_as_docker" == true ]]; then
+        log "Docker Compose plugin is ready"
+    else
+        log "Docker Compose standalone command is ready"
+    fi
 }
 
 set_env_value() {
@@ -91,8 +221,8 @@ PY
         return
     fi
 
-    if docker run --help >/dev/null 2>&1; then
-        docker run --rm -i -e ADMIN_PASSWORD="$password" python:3.13-alpine python - <<'PY'
+    if run_docker run --help >/dev/null 2>&1; then
+        run_docker run --rm -i -e ADMIN_PASSWORD="$password" python:3.13-alpine python - <<'PY'
 import hashlib
 import os
 import secrets
@@ -170,9 +300,7 @@ main() {
     cd -- "$SCRIPT_DIR"
     umask 077
 
-    require_command docker
-    docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (try: docker compose version)"
-    docker info >/dev/null 2>&1 || die "Docker is not running or the current user cannot access it"
+    ensure_docker
 
     if [[ ! -f "$ENV_FILE" ]]; then
         touch "$ENV_FILE"
@@ -189,7 +317,7 @@ main() {
     prepare_runtime_config
 
     log "Validating Docker Compose configuration"
-    docker compose config >/dev/null
+    run_compose config >/dev/null
 
     if [[ "$no_start" == true ]]; then
         printf '\nConfiguration ready. Start the portal with: docker compose up --build -d\n'
@@ -197,7 +325,7 @@ main() {
     fi
 
     log "Building and starting the portal"
-    docker compose up --build -d
+    run_compose up --build -d
 
     cat <<'EOF'
 
