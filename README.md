@@ -26,8 +26,10 @@ openSUSE and Alpine. It may ask for the `sudo` password to install system
 packages and start Docker.
 
 The generated `.env` and `.runtime/` directory are local-only and are ignored
-by Git. Advanced deployments using the local QEMU backend can continue to use
-`portal/config.yml` and provide the host-specific libvirt and storage paths.
+by Git. The standard Docker installation intentionally does not mount host
+libvirt or storage paths because it uses the self-contained `vcsim` backend.
+Advanced local-QEMU deployments should run the portal directly or provide a
+dedicated Compose override with host paths mapped to container paths.
 
 ## Run with Docker Compose
 

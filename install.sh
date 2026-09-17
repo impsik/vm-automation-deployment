@@ -276,8 +276,7 @@ ensure_admin_credentials() {
 }
 
 prepare_runtime_config() {
-    mkdir -p "$RUNTIME_DIR" "$RUNTIME_DIR/kvm" "$RUNTIME_DIR/vm-foundry"
-    touch "$RUNTIME_DIR/libvirt-sock"
+    mkdir -p "$RUNTIME_DIR"
     cp -- "$SCRIPT_DIR/portal/config.yml" "$RUNTIME_CONFIG"
 
     # The self-contained installer uses vcsim. Local QEMU remains available for
@@ -311,9 +310,6 @@ main() {
     ensure_admin_credentials
 
     set_env_value PORTAL_CONFIG_PATH "./.runtime/config.yml"
-    set_env_value LIBVIRT_SOCKET_PATH "./.runtime/libvirt-sock"
-    set_env_value KVM_READONLY_PATH "./.runtime/kvm"
-    set_env_value KVM_STORAGE_PATH "./.runtime/vm-foundry"
     prepare_runtime_config
 
     log "Validating Docker Compose configuration"
