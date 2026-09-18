@@ -316,14 +316,14 @@ ensure_python() {
 }
 
 ensure_local_qemu() {
-    if ! command -v virsh >/dev/null || ! command -v qemu-img >/dev/null || ! command -v qemu-system-x86_64 >/dev/null || ! command -v setfacl >/dev/null; then
+    if ! command -v virsh >/dev/null || ! command -v qemu-img >/dev/null || ! command -v qemu-system-x86_64 >/dev/null || ! command -v setfacl >/dev/null || ! command -v wget >/dev/null; then
         if command -v apt-get >/dev/null; then
             run_as_root apt-get update
-            run_as_root apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients acl
+            run_as_root apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients acl wget
         elif command -v dnf >/dev/null; then
-            run_as_root dnf install -y qemu-kvm qemu-img libvirt libvirt-client acl
+            run_as_root dnf install -y qemu-kvm qemu-img libvirt libvirt-client acl wget
         else
-            die "Install QEMU/KVM, libvirt, virsh and ACL tools; automatic local-QEMU packages support Debian/Ubuntu and Fedora/RHEL"
+            die "Install QEMU/KVM, libvirt, virsh, wget and ACL tools; automatic local-QEMU packages support Debian/Ubuntu and Fedora/RHEL"
         fi
     fi
     [[ -c /dev/kvm ]] || die "KVM is unavailable; enable hardware or nested virtualization"

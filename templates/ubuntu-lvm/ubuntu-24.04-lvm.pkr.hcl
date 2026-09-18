@@ -12,6 +12,16 @@ variable "output_directory" {
   default = "output/ubuntu-24.04-lvm"
 }
 
+variable "iso_url" {
+  type    = string
+  default = "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
+}
+
+variable "iso_checksum" {
+  type    = string
+  default = "file:https://releases.ubuntu.com/24.04/SHA256SUMS"
+}
+
 source "qemu" "ubuntu_lvm" {
   accelerator = "kvm"
   boot_wait   = "5s"
@@ -30,8 +40,8 @@ source "qemu" "ubuntu_lvm" {
   format           = "qcow2"
   headless         = true
   http_directory   = "${path.root}/http"
-  iso_checksum     = "file:https://releases.ubuntu.com/24.04/SHA256SUMS"
-  iso_url          = "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
+  iso_checksum     = var.iso_checksum
+  iso_url          = var.iso_url
   memory           = 4096
   net_device       = "virtio-net"
   output_directory = var.output_directory

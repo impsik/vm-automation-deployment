@@ -29,13 +29,17 @@ sets storage access for the portal, and generates the configuration and Compose
 mounts. Host and container use identical absolute disk paths.
 
 Missing Ubuntu LVM images can be built automatically with Packer after a prompt.
-This downloads an Ubuntu server ISO and may take 30 minutes or longer. Packer is
-downloaded from HashiCorp with SHA256 verification if missing. Builds require
+The ISO is downloaded with `wget` into `.runtime/iso-cache/`, then checked against
+Ubuntu's SHA256SUMS before Packer receives the local file. Interrupted downloads
+resume on rerun; complete cached ISOs are verified and reused. Download, checksum
+verification and image building are reported separately. The full image build
+may take 30 minutes or longer. Packer is downloaded from HashiCorp with SHA256
+verification if missing. Builds require
 an x86_64 KVM host, at least 4 GB free RAM for the build guest, sufficient disk
 space and Internet access. Existing backing images are reused, never overwritten.
 
 Local-QEMU packages are installed automatically on Debian/Ubuntu and Fedora/RHEL;
-other distributions need QEMU/KVM, libvirt and ACL tools installed beforehand.
+other distributions need QEMU/KVM, libvirt, wget and ACL tools installed beforehand.
 The default libvirt NAT network is created only when missing. The installer
 generates cloud-init with the SSH account/key selected by the portal user.
 

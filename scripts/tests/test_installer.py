@@ -1,5 +1,7 @@
 """Deployment generation tests: isolated directories, no host reconfiguration."""
 import importlib.util
+import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
@@ -100,6 +102,7 @@ class InstallerTest(unittest.TestCase):
 
     def test_failed_build_keeps_existing_other_version(self):
         with patch.object(images.os, 'access', return_value=True), \
+             patch.object(images, 'download_iso', return_value=(self.root / 'test.iso', 'sha256:test')), \
              patch.object(images, 'packer_binary', return_value='packer'), \
              patch.object(images.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'packer')):
             with self.assertRaises(subprocess.CalledProcessError):
@@ -116,6 +119,7 @@ class InstallerTest(unittest.TestCase):
                 output.mkdir(parents=True)
                 (output / 'ubuntu-22.04-lvm.qcow2').write_bytes(b'new image')
         with patch.object(images.os, 'access', return_value=True), \
+             patch.object(images, 'download_iso', return_value=(self.root / 'test.iso', 'sha256:test')), \
              patch.object(images, 'packer_binary', return_value='packer'), \
              patch.object(images.subprocess, 'run', side_effect=run):
             images.build(self.root, self.data, '22.04')
@@ -123,7 +127,63 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(image.read_bytes(), b'new image')
         self.assertEqual(image.stat().st_mode & 0o777, 0o644)
         self.assertEqual(commands[-1][:2], ['qemu-img', 'check'])
+        self.assertIn(f'iso_url={self.root / "test.iso"}', commands[1])
+        self.assertIn('iso_checksum=sha256:test', commands[1])
         self.assertEqual(self.image.read_bytes(), b'example-existing-image')
+
+    def test_iso_download_verify_and_reuse(self):
+        payload = b'test ISO content'
+        digest = hashlib.sha256(payload).hexdigest()
+        name = 'ubuntu-24.04.3-live-server-amd64.iso'
+        def run(command, **kwargs):
+            self.assertEqual(command[0], 'wget')
+            self.assertIn('--continue', command)
+            Path(command[command.index('--output-document') + 1]).write_bytes(payload)
+        with patch.object(images.subprocess, 'run', side_effect=run) as wget, \
+             patch.object(images.urllib.request, 'urlopen', side_effect=lambda *a, **k:
+                          io.BytesIO(f'{digest} *{name}\n'.encode())):
+            iso, checksum = images.download_iso(self.root, '24.04')
+            self.assertEqual(iso.read_bytes(), payload)
+            self.assertEqual(checksum, 'sha256:' + digest)
+            self.assertEqual(images.download_iso(self.root, '24.04'), (iso, checksum))
+            wget.assert_called_once()
+        self.assertFalse(iso.with_name(name + '.part').exists())
+
+    def test_iso_bad_checksum_removes_only_invalid_cache(self):
+        cache = self.root / 'iso-cache'
+        cache.mkdir()
+        partial = cache / 'ubuntu-24.04.3-live-server-amd64.iso.part'
+        partial.write_bytes(b'corrupted')
+        with patch.object(images.subprocess, 'run'), \
+             patch.object(images.urllib.request, 'urlopen', return_value=io.BytesIO(
+                 (('0' * 64) + ' *ubuntu-24.04.3-live-server-amd64.iso\n').encode())):
+            with self.assertRaisesRegex(ValueError, 'ISO checksum mismatch'):
+                images.download_iso(self.root, '24.04')
+        self.assertFalse(partial.exists())
+        self.assertEqual(self.image.read_bytes(), b'example-existing-image')
+
+    def test_interrupted_iso_is_kept_for_resume(self):
+        cache = self.root / 'iso-cache'
+        cache.mkdir()
+        partial = cache / 'ubuntu-24.04.3-live-server-amd64.iso.part'
+        partial.write_bytes(b'partial download')
+        with patch.object(images.subprocess, 'run', side_effect=subprocess.CalledProcessError(4, 'wget')), \
+             patch.object(images.urllib.request, 'urlopen') as checksum:
+            with self.assertRaises(subprocess.CalledProcessError):
+                images.download_iso(self.root, '24.04')
+            checksum.assert_not_called()
+        self.assertEqual(partial.read_bytes(), b'partial download')
+
+    def test_missing_checksum_keeps_download_but_refuses_image(self):
+        cache = self.root / 'iso-cache'
+        cache.mkdir()
+        partial = cache / 'ubuntu-24.04.3-live-server-amd64.iso.part'
+        partial.write_bytes(b'downloaded')
+        with patch.object(images.subprocess, 'run'), \
+             patch.object(images.urllib.request, 'urlopen', return_value=io.BytesIO(b'')):
+            with self.assertRaisesRegex(ValueError, 'No unambiguous SHA256'):
+                images.download_iso(self.root, '24.04')
+        self.assertTrue(partial.exists())
 
     def test_saved_legacy_paths_are_reused(self):
         shutil.copy(ROOT / 'install.sh', self.root / 'install.sh')

@@ -11,6 +11,44 @@ import urllib.request
 import zipfile
 
 
+ISO_RELEASES = {'22.04': '22.04.5', '24.04': '24.04.3'}
+
+
+def download_iso(runtime, version):
+    name = f'ubuntu-{ISO_RELEASES[version]}-live-server-amd64.iso'
+    base = f'https://releases.ubuntu.com/{version}/'
+    cache = runtime / 'iso-cache'
+    cache.mkdir(parents=True, exist_ok=True)
+    target = cache / name
+    partial = cache / (name + '.part')
+    if not target.exists():
+        print(f'Downloading ISO with wget: {name}', flush=True)
+        subprocess.run(['wget', '--continue', '--progress=bar:force',
+                        '--output-document', str(partial), base + name], check=True)
+    candidate = target if target.exists() else partial
+    print(f'Checking ISO SHA256: {candidate.name}', flush=True)
+    with urllib.request.urlopen(base + 'SHA256SUMS', timeout=60) as response:
+        entries = [line.split() for line in response.read().decode().splitlines()]
+    matches = [fields[0] for fields in entries
+               if len(fields) == 2 and fields[1].lstrip('*') == name]
+    if len(matches) != 1 or len(matches[0]) != 64 or any(
+            char not in '0123456789abcdefABCDEF' for char in matches[0]):
+        raise ValueError(f'No unambiguous SHA256 checksum found for {name}')
+    expected = matches[0].lower()
+    digest = hashlib.sha256()
+    with candidate.open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(block)
+    if digest.hexdigest() != expected:
+        # Remove only this managed cache file so a retry starts a clean download.
+        candidate.unlink()
+        raise ValueError(f'ISO checksum mismatch for {name}; invalid cache file removed. Retry the installer.')
+    if candidate == partial:
+        partial.replace(target)
+    print('ISO checksum OK; using local file for Packer.', flush=True)
+    return target, 'sha256:' + expected
+
+
 def packer_binary(runtime):
     existing = shutil.which('packer')
     if existing:
@@ -48,6 +86,7 @@ def build(root, data, version):
         raise ValueError('KVM access required. Log in again after joining the kvm group.')
     runtime = root / '.runtime'
     runtime.mkdir(exist_ok=True)
+    iso, checksum = download_iso(runtime, version)
     packer = packer_binary(runtime)
     template = root / f'templates/ubuntu-lvm/ubuntu-{version}-lvm.pkr.hcl'
     target_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -56,7 +95,9 @@ def build(root, data, version):
     env = dict(os.environ, PACKER_CACHE_DIR=str(runtime / 'packer-cache'))
     try:
         subprocess.run([packer, 'init', str(template)], check=True, env=env)
-        subprocess.run([packer, 'build', '-var', f'output_directory={output}', str(template)],
+        print('Building Ubuntu template with Packer (ISO download complete).', flush=True)
+        subprocess.run([packer, 'build', '-var', f'output_directory={output}',
+                        '-var', f'iso_url={iso}', '-var', f'iso_checksum={checksum}', str(template)],
                        check=True, env=env)
         subprocess.run(['qemu-img', 'check', str(output / target.name)], check=True)
         output.chmod(0o755)
