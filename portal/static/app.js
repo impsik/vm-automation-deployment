@@ -175,6 +175,11 @@ function resizeForm(r) {
 }
 
 function lifecycleControls(r) {
+  if (config.provisioning_backend === "local_qemu" && r.status === "failed") {
+    return `<div class="lifecycle-panel"><div class="lifecycle-actions">
+      <button class="reject vm-delete" data-id="${esc(r.id)}" data-hostname="${esc(r.hostname)}">Delete failed request</button>
+      </div><p>The portal will verify that the VM is absent before removing this request.</p></div>`;
+  }
   if (config.provisioning_backend !== "local_qemu" || r.status !== "completed") return "";
   const state = r.vm_state || "unknown";
   const resizeSnapshots = (r.resize_snapshots || []).filter(
@@ -455,6 +460,7 @@ async function loadRequests() {
     openConsole(button.dataset.id, button.dataset.hostname);
   });
   document.querySelectorAll(".vm-delete").forEach(button => button.onclick = async () => {
+    const original = button.textContent;
     let plan;
     try {
       plan = await api(`/api/requests/${button.dataset.id}/delete-plan`);
@@ -463,9 +469,15 @@ async function loadRequests() {
       return;
     }
     if (!confirm(
-      `Delete virtual machine ${plan.hostname}?\n\n` +
-      `This virtual machine will be permanently deleted. This action cannot be undone.`
+      `Delete ${plan.failed_request ? "failed request" : "virtual machine"} ${plan.hostname}?\n\n` +
+      `${plan.warning} This action cannot be undone.`
     )) return;
+    let confirmFiles = false;
+    if (plan.failed_request && plan.file_count > 0) {
+      confirmFiles = confirm(`Also permanently delete ${plan.file_count} leftover VM file(s)?\n\n` +
+        plan.file_names.join("\n") + "\n\nCancel keeps both the files and the request.");
+      if (!confirmFiles) return;
+    }
     const confirmation = prompt(`Type ${plan.hostname} to confirm deletion:`, "");
     if (confirmation !== plan.hostname) return;
     button.disabled = true;
@@ -476,13 +488,14 @@ async function loadRequests() {
         body: JSON.stringify({
           confirm_hostname: confirmation,
           confirmation_token: plan.confirmation_token,
+          confirm_files: confirmFiles,
         }),
       });
-      toast(`VM ${plan.hostname} deleted`);
+      toast(`${plan.failed_request ? "Failed request" : "VM"} ${plan.hostname} deleted`);
       await loadRequests();
     } catch (error) {
       button.disabled = false;
-      button.textContent = "Delete VM";
+      button.textContent = original;
       toast(error.detail || error.error || "VM deletion failed");
     }
   });

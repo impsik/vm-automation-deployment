@@ -109,6 +109,14 @@ docker compose down
 Requests and audit events are persisted in a SQLite database in the
 `portal-data` Docker volume.
 
+For `local_qemu`, failed requests have a **Delete failed request** button. The
+portal first verifies that no libvirt VM with that hostname exists. Confirm the
+hostname to remove the request and its events; any leftover VM files are listed
+and require a separate confirmation. Cancelling keeps the request and files.
+Libvirt connection failures, an existing VM, or another request sharing the
+hostname block cleanup. VM state and deletion targets are checked again when
+the deletion is submitted.
+
 Run the isolated API integration tests after backend or approval-workflow
 changes:
 

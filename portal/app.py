@@ -792,14 +792,36 @@ def domain_disk_files(hostname: str) -> list[dict]:
     return disks
 
 
+def deletion_domain_exists(hostname: str) -> bool:
+    """Only a successful domain listing can establish absence for deletion."""
+    result = subprocess.run(
+        ["virsh", "--connect", LOCAL_QEMU.get("uri", "qemu:///system"),
+         "list", "--all", "--name"],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Unable to verify VM absence in libvirt; deletion blocked")
+    return hostname in result.stdout.splitlines()
+
+
 def vm_delete_plan(request: dict) -> tuple[dict | None, str]:
     """Return the exact infrastructure and database scope of a VM deletion."""
     if PROVISIONING_BACKEND != "local_qemu":
         return None, "VM deletion requires the local QEMU backend"
-    if request.get("status") != "completed":
-        return None, "Only a completed virtual machine can be deleted"
+    if request.get("status") not in ("completed", "failed"):
+        return None, "Only completed VMs or failed requests can be deleted"
 
     hostname = request["hostname"]
+    try:
+        domain_exists = deletion_domain_exists(hostname)
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        return None, f"Unable to verify VM state; nothing was deleted: {error}"
+    failed = request.get("status") == "failed"
+    if failed and domain_exists:
+        return None, "A libvirt VM still exists for this failed request; administrator review is required"
+    if failed and any(item["id"] != request["id"] and item.get("hostname") == hostname
+                      for item in load_requests()):
+        return None, "Another request uses this hostname; administrator review is required"
     storage_path = Path(LOCAL_QEMU["storage_path"]).resolve()
     candidate_paths = {
         storage_path / f"{hostname}.qcow2",
@@ -835,7 +857,6 @@ def vm_delete_plan(request: dict) -> tuple[dict | None, str]:
     except OSError as error:
         return None, f"Unable to inspect VM storage: {error}"
 
-    domain_exists = local_qemu_domain_exists(hostname)
     with database() as connection:
         event_count = connection.execute(
             "SELECT COUNT(*) AS count FROM events WHERE request_id = ?",
@@ -853,6 +874,7 @@ def vm_delete_plan(request: dict) -> tuple[dict | None, str]:
         "domain_exists": domain_exists,
         "file_paths": files,
         "file_count": len(files),
+        "failed_request": failed,
         "database_records": {"requests": 1, "events": event_count},
         "delete_targets": targets,
         "delete_target_count": len(targets),
@@ -860,13 +882,15 @@ def vm_delete_plan(request: dict) -> tuple[dict | None, str]:
     }, ""
 
 
-def delete_vm(request: dict, confirmed_targets: list[str]) -> tuple[bool, str]:
+def delete_vm(request: dict, confirmed_targets: list[str], confirm_files: bool = False) -> tuple[bool, str]:
     """Delete a local-QEMU VM only when its freshly inspected scope matches."""
     plan, detail = vm_delete_plan(request)
     if not plan:
         return False, detail
     if confirmed_targets != plan["delete_targets"]:
         return False, "VM deletion scope changed; review and confirm the targets again"
+    if plan["failed_request"] and plan["file_count"] and not confirm_files:
+        return False, "Separate confirmation is required to remove leftover VM files"
 
     hostname = request["hostname"]
     uri = LOCAL_QEMU.get("uri", "qemu:///system")
@@ -2268,7 +2292,11 @@ class PortalHandler(SimpleHTTPRequestHandler):
                 "hostname": plan["hostname"],
                 "confirmation_token": token,
                 "expires_in": 300,
-                "warning": "This virtual machine will be permanently deleted.",
+                "failed_request": plan["failed_request"],
+                "file_count": plan["file_count"],
+                "file_names": [Path(file).name for file in plan["file_paths"]],
+                "warning": ("The VM is absent. Its failed request and event history will be permanently removed."
+                            if plan["failed_request"] else "This virtual machine will be permanently deleted."),
             })
         match = RESIZE_SNAPSHOT_CLEANUP_PLAN_PATH.fullmatch(path)
         if match:
@@ -2342,7 +2370,7 @@ class PortalHandler(SimpleHTTPRequestHandler):
                         {"error": "Deletion confirmation has expired; confirm the deletion again"},
                         HTTPStatus.UNPROCESSABLE_ENTITY,
                     )
-                success, detail = delete_vm(request, ticket["targets"])
+                success, detail = delete_vm(request, ticket["targets"], payload.get("confirm_files") is True)
             if not success:
                 return self.send_json(
                     {"error": "VM deletion failed", "detail": detail},
