@@ -177,8 +177,11 @@ function resizeForm(r) {
 function lifecycleControls(r) {
   if (config.provisioning_backend === "local_qemu" && r.status === "failed") {
     return `<div class="lifecycle-panel"><div class="lifecycle-actions">
-      <button class="reject vm-delete" data-id="${esc(r.id)}" data-hostname="${esc(r.hostname)}">Delete failed request</button>
-      </div><p>The portal will verify that the VM is absent before removing this request.</p></div>`;
+      <button type="button" class="reject vm-delete failed-request-delete" aria-describedby="delete-help-${esc(r.id)}" data-id="${esc(r.id)}" data-hostname="${esc(r.hostname)}">
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"/></svg>
+        <span>Delete failed request</span>
+      </button>
+      </div><p class="failed-request-delete-help" id="delete-help-${esc(r.id)}">Remove this failed request from the portal. You will be asked to confirm; any leftover files require separate approval.</p></div>`;
   }
   if (config.provisioning_backend !== "local_qemu" || r.status !== "completed") return "";
   const state = r.vm_state || "unknown";
@@ -460,7 +463,7 @@ async function loadRequests() {
     openConsole(button.dataset.id, button.dataset.hostname);
   });
   document.querySelectorAll(".vm-delete").forEach(button => button.onclick = async () => {
-    const original = button.textContent;
+    const originalContent = [...button.childNodes];
     let plan;
     try {
       plan = await api(`/api/requests/${button.dataset.id}/delete-plan`);
@@ -495,7 +498,7 @@ async function loadRequests() {
       await loadRequests();
     } catch (error) {
       button.disabled = false;
-      button.textContent = original;
+      button.replaceChildren(...originalContent);
       toast(error.detail || error.error || "VM deletion failed");
     }
   });

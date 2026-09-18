@@ -122,6 +122,48 @@
   flex-wrap: wrap;
 }
 
+.lifecycle-actions .failed-request-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 11px 18px;
+  border: 1px solid #a52222;
+  border-radius: 8px;
+  background: #b42323;
+  color: #fff;
+  font: 600 14px/1.4 "DM Sans", sans-serif;
+  cursor: pointer;
+  box-shadow: 0 2px 3px rgb(0 0 0 / 12%);
+}
+
+.lifecycle-actions .failed-request-delete:hover:not(:disabled) {
+  background: #941c1c;
+  border-color: #801818;
+}
+
+.lifecycle-actions .failed-request-delete:focus-visible {
+  outline: 3px solid #005fed;
+  outline-offset: 3px;
+}
+
+.lifecycle-actions .failed-request-delete:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.failed-request-delete svg {
+  flex-shrink: 0;
+}
+
+.failed-request-delete-help {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .console-modal {
   position: fixed;
   inset: 0;
