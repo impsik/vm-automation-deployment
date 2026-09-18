@@ -29,6 +29,9 @@ images = module('prepare_image')
 
 class InstallerTest(unittest.TestCase):
     def setUp(self):
+        discovery = patch.object(images, 'fastest_server', return_value=None)
+        self.discovery = discovery.start()
+        self.addCleanup(discovery.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -147,6 +150,7 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(checksum, 'sha256:' + digest)
             self.assertEqual(images.download_iso(self.root, '24.04'), (iso, checksum))
             wget.assert_called_once()
+            self.discovery.assert_called_once()
         self.assertFalse(iso.with_name(name + '.part').exists())
 
     def test_iso_bad_checksum_removes_only_invalid_cache(self):
@@ -220,6 +224,46 @@ configure_local_qemu_paths
                 command += ['-f', str(self.root / file)]
             subprocess.run(command + ['config', '--quiet'], cwd=self.root, check=True,
                            env={k: v for k, v in os.environ.items() if not k.startswith('COMPOSE_')})
+
+
+class ServerSelectionTest(unittest.TestCase):
+    def test_fastest_transfer_wins(self):
+        result = subprocess.CompletedProcess([], 0, '["192.0.2.1", "192.0.2.2"]')
+        with patch.object(images.urllib.request, 'getproxies', return_value={}), \
+             patch.object(images.subprocess, 'run', return_value=result) as resolver, \
+             patch.object(images, 'probe_server', side_effect=lambda ip, path:
+                          {'192.0.2.1': 1000, '192.0.2.2': 100000}[ip]):
+            self.assertEqual(images.fastest_server('https://releases.ubuntu.com/test.iso'), '192.0.2.2')
+            self.assertEqual(resolver.call_args.kwargs['timeout'], 3)
+
+    def test_failed_probes_fall_back(self):
+        result = subprocess.CompletedProcess([], 0, '["192.0.2.1"]')
+        with patch.object(images.urllib.request, 'getproxies', return_value={}), \
+             patch.object(images.subprocess, 'run', return_value=result), \
+             patch.object(images, 'probe_server', return_value=0):
+            self.assertIsNone(images.fastest_server('https://releases.ubuntu.com/test.iso'))
+
+    def test_dns_timeout_falls_back(self):
+        with patch.object(images.urllib.request, 'getproxies', return_value={}), \
+             patch.object(images.subprocess, 'run', side_effect=subprocess.TimeoutExpired('dns', 3)):
+            self.assertIsNone(images.fastest_server('https://releases.ubuntu.com/test.iso'))
+
+    def test_configured_proxy_is_preserved(self):
+        with patch.object(images.urllib.request, 'getproxies', return_value={'https': 'http://proxy'}), \
+             patch.object(images.subprocess, 'run') as resolver:
+            self.assertIsNone(images.fastest_server('https://releases.ubuntu.com/test.iso'))
+            resolver.assert_not_called()
+
+    def test_tunnel_rejects_other_hosts_and_closes(self):
+        with images.pinned_wget_options('192.0.2.1') as options:
+            self.assertNotIn('--no-check-certificate', options)
+            address = images.urllib.parse.urlsplit(options[-1].split('=', 1)[1])
+            connection = images.http.client.HTTPConnection(address.hostname, address.port, timeout=2)
+            connection.request('CONNECT', 'example.com:443')
+            self.assertEqual(connection.getresponse().status, 403)
+            connection.close()
+        with self.assertRaises(OSError):
+            socket.create_connection((address.hostname, address.port), timeout=1)
 
 
 if __name__ == '__main__':

@@ -29,6 +29,12 @@ sets storage access for the portal, and generates the configuration and Compose
 mounts. Host and container use identical absolute disk paths.
 
 Missing Ubuntu LVM images can be built automatically with Packer after a prompt.
+Before downloading, up to six DNS-resolved Ubuntu server addresses are tested in
+parallel (up to 2 MiB per address, four-second probe budget plus up to three seconds
+for DNS). The fastest measured address is used by `wget` through a temporary
+loopback CONNECT tunnel, retaining HTTPS hostname/certificate verification without
+changing system DNS or `/etc/hosts`. Failed tests fall back to normal DNS selection;
+an environment-configured proxy skips the test. Cached complete ISOs skip it too.
 The ISO is downloaded with `wget` into `.runtime/iso-cache/`, then checked against
 Ubuntu's SHA256SUMS before Packer receives the local file. Interrupted downloads
 resume on rerun; complete cached ISOs are verified and reused. Download, checksum
