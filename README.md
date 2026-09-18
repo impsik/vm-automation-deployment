@@ -22,13 +22,28 @@ PBKDF2-SHA256 hash, generates `.runtime/config.yml` and starts the portal.
 Open <http://localhost:8080> afterwards. Run `./install.sh --no-start` if you
 only want to prepare the configuration.
 
-`vcsim` is self-contained and needs no host VM storage. For `local_qemu`, the
-installer also asks for the libvirt socket, QEMU image/template directory and
-VM storage directory, then creates the required Compose override and maps them
-to identical absolute paths inside the container. Host libvirt must be able to
-resolve the same disk and qcow2 backing-image paths as the portal. If storage
-is below the read-only image directory, create that storage directory on the
-host before starting Compose (the installer does this).
+`vcsim` is self-contained and needs no host VM storage. For `local_qemu`, choose
+one data directory (default `/var/lib/vm-foundry`) and Ubuntu 22.04 or 24.04.
+The installer creates `templates/`, `instances/` and `cloud-init/` underneath,
+sets storage access for the portal, and generates the configuration and Compose
+mounts. Host and container use identical absolute disk paths.
+
+Missing Ubuntu LVM images can be built automatically with Packer after a prompt.
+This downloads an Ubuntu server ISO and may take 30 minutes or longer. Packer is
+downloaded from HashiCorp with SHA256 verification if missing. Builds require
+an x86_64 KVM host, at least 4 GB free RAM for the build guest, sufficient disk
+space and Internet access. Existing backing images are reused, never overwritten.
+
+Local-QEMU packages are installed automatically on Debian/Ubuntu and Fedora/RHEL;
+other distributions need QEMU/KVM, libvirt and ACL tools installed beforehand.
+The default libvirt NAT network is created only when missing. The installer
+generates cloud-init with the SSH account/key selected by the portal user.
+
+Reruns preserve saved paths from `.env` (including older `KVM_READONLY_PATH` and
+`KVM_STORAGE_PATH` installations), existing cloud-init templates and custom
+LDAP/SMTP settings in `.runtime/config.yml`. The prior runtime YAML is saved as
+`.runtime/config.previous.yml`. Existing VM disks are not moved. Choose the
+saved directory on upgrades; moving backing files requires a separate migration.
 
 The installer supports Debian/Ubuntu, Fedora/RHEL-compatible systems, Arch,
 openSUSE and Alpine. It may ask for the `sudo` password to install system
@@ -235,7 +250,7 @@ Configure the SMTP relay and recipient in `portal/config.yml`:
 ```yaml
 notifications:
   enabled: true
-  to: imre@localhost
+  to: admin@example.com
   from: vm-foundry@localhost
   smtp_host: 172.17.0.1
   smtp_port: 25

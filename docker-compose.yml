@@ -18,8 +18,6 @@ services:
     volumes:
       - portal-data:/data
       - ${PORTAL_CONFIG_PATH:-./portal/config.yml}:/app/config.yml:ro
-    group_add:
-      - "148"
     depends_on:
       vcsim:
         condition: service_started

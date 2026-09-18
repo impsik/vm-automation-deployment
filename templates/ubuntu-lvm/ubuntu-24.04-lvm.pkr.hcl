@@ -9,7 +9,7 @@ packer {
 
 variable "output_directory" {
   type    = string
-  default = "/home/imre/chia/Hetznerist/kvm/templates/ubuntu-24.04-lvm"
+  default = "output/ubuntu-24.04-lvm"
 }
 
 source "qemu" "ubuntu_lvm" {
@@ -29,7 +29,7 @@ source "qemu" "ubuntu_lvm" {
   disk_size        = "20G"
   format           = "qcow2"
   headless         = true
-  http_directory   = "http"
+  http_directory   = "${path.root}/http"
   iso_checksum     = "file:https://releases.ubuntu.com/24.04/SHA256SUMS"
   iso_url          = "https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso"
   memory           = 4096

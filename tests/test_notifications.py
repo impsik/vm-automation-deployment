@@ -13,11 +13,11 @@ class NotificationTemplateTest(unittest.TestCase):
             "fqdn": "mailtest.example.test",
             "domain": "example.test",
             "status": "completed",
-            "requested_by": "imre",
+            "requested_by": "testuser",
             "environment": "development",
             "image": "Ubuntu 22.04 LTS (LVM)",
             "ip_address": "192.0.2.10",
-            "ssh_login_user": "imre",
+            "ssh_login_user": "ubuntu",
             "resources": {"vcpu": 4, "memory_gb": 8, "disk_gb": 80},
             "additional_disks": [
                 {
@@ -35,7 +35,7 @@ class NotificationTemplateTest(unittest.TestCase):
         self.assertIn("192.0.2.10", body)
         self.assertIn("vCPU: 4", body)
         self.assertIn("/data: 100 GB", body)
-        self.assertIn("SSH user: imre", body)
+        self.assertIn("SSH user: ubuntu", body)
 
     def test_resize_template_contains_before_and_after(self):
         subject, body = app.notification_message(
@@ -64,7 +64,7 @@ class NotificationTemplateTest(unittest.TestCase):
         self.assertIn("Administrator: admin", body)
 
     @patch.object(app, "NOTIFICATION_ENABLED", True)
-    @patch.object(app, "NOTIFICATION_TO", "imre@localhost")
+    @patch.object(app, "NOTIFICATION_TO", "admin@example.com")
     @patch.object(app.smtplib, "SMTP")
     def test_send_uses_configured_smtp_and_records_success(self, smtp):
         request = self.request()

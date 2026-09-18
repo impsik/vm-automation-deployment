@@ -105,7 +105,7 @@ NOTIFICATION_FROM = str(
 ).strip()
 SMTP_HOST = str(NOTIFICATIONS.get("smtp_host", "127.0.0.1")).strip()
 SMTP_PORT = int(NOTIFICATIONS.get("smtp_port", 25))
-SSH_LOGIN_USER = str(LOCAL_QEMU.get("ssh_user", "imre")).strip()
+SSH_LOGIN_USER = str(LOCAL_QEMU.get("ssh_user", "ubuntu")).strip()
 PUBLIC_PREFLIGHT_ERROR = (
     "A virtual machine with these parameters cannot be provisioned automatically. "
     f"Please send the request to {SUPPORT_EMAIL}."
@@ -195,7 +195,7 @@ def database() -> sqlite3.Connection:
     }
     if "login_user" not in ssh_key_columns:
         connection.execute(
-            "ALTER TABLE ssh_keys ADD COLUMN login_user TEXT NOT NULL DEFAULT 'imre'"
+            "ALTER TABLE ssh_keys ADD COLUMN login_user TEXT NOT NULL DEFAULT 'ubuntu'"
         )
     return connection
 

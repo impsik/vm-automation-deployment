@@ -222,36 +222,122 @@ choose_backend() {
 }
 
 configure_local_qemu_paths() {
-    local default_kvm default_storage default_socket
-    local libvirt_socket kvm_readonly kvm_storage
-
-    default_socket="/var/run/libvirt/libvirt-sock"
-    default_kvm="/home/imre/chia/Hetznerist/kvm"
-    default_storage="$default_kvm/vm-foundry"
-
-    read -r -p "Libvirt socket [$default_socket]: " libvirt_socket
-    libvirt_socket="${libvirt_socket:-$default_socket}"
-    read -r -p "QEMU read-only data path [$default_kvm]: " kvm_readonly
-    kvm_readonly="${kvm_readonly:-$default_kvm}"
-    read -r -p "QEMU storage path [$default_storage]: " kvm_storage
-    kvm_storage="${kvm_storage:-$default_storage}"
-
-    [[ -S "$libvirt_socket" ]] || die "Libvirt socket not found: $libvirt_socket"
-    [[ -f "$kvm_readonly/cloud_init.cfg.orig" ]] || die "Cloud-init template not found under: $kvm_readonly"
-    [[ -d "$kvm_readonly/templates" ]] || die "QEMU templates directory not found: $kvm_readonly/templates"
-    mkdir -p "$kvm_storage"
-
-    kvm_readonly="$(realpath "$kvm_readonly")"
-    kvm_storage="$(realpath "$kvm_storage")"
-    # These values are interpolated into YAML and sed expressions below.
-    for path in "$libvirt_socket" "$kvm_readonly" "$kvm_storage"; do
-        [[ "$path" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "Use absolute paths without spaces or special characters: $path"
+    local previous data storage cloud socket version answer owner path qemu_user ancestor
+    previous="$(read_env_value VM_FOUNDRY_DATA_DIR)"
+    previous="${previous:-$(read_env_value KVM_READONLY_PATH)}"
+    read -r -p "VM Foundry data directory [${previous:-/var/lib/vm-foundry}]: " data
+    data="${data:-${previous:-/var/lib/vm-foundry}}"
+    [[ "$data" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "Use an absolute data path without spaces or special characters"
+    data="$(realpath -m "$data")"
+    [[ "$data" != / && "$data" != /var && "$data" != /var/lib ]] || die "Choose a dedicated application data directory"
+    if [[ -n "$previous" && "$data" != "$(realpath -m "$previous")" ]]; then
+        die "Existing deployment uses $previous. Moving VM disks requires a separate migration."
+    fi
+    storage="$(read_env_value KVM_STORAGE_PATH)"
+    storage="${storage:-$data/instances}"
+    cloud="$(read_env_value CLOUD_INIT_TEMPLATE)"
+    if [[ -z "$cloud" && -f "$data/cloud_init.cfg.orig" ]]; then
+        cloud="$data/cloud_init.cfg.orig"
+    fi
+    cloud="${cloud:-$data/cloud-init/user-data.yml}"
+    socket="$(read_env_value LIBVIRT_SOCKET_PATH)"
+    socket="${socket:-/var/run/libvirt/libvirt-sock}"
+    ensure_local_qemu
+    [[ -S "$socket" ]] || die "Libvirt socket missing: $socket. Start libvirtd or virtproxyd."
+    owner="${SUDO_USER:-$(id -un)}"
+    for path in "$data" "$data/templates" "$data/cloud-init" "$storage"; do
+        if [[ ! -d "$path" ]]; then
+            run_as_root install -d -m 0755 -o "$owner" "$path"
+        fi
     done
-    [[ "$kvm_storage" != "$kvm_readonly" ]] || die "Storage must be a separate directory from read-only image data"
+    [[ -w "$data/templates" ]] || die "Template directory must be writable by the installer user: $data/templates"
+    if [[ ! -f "$cloud" ]]; then
+        run_as_root install -m 0644 "$SCRIPT_DIR/templates/cloud-init/user-data.yml" "$cloud"
+    fi
+    # Grant the container UID access without changing existing disk ownership.
+    if [[ ! -w "$storage" || "$(id -u)" != 1000 ]]; then
+        run_as_root setfacl -m u:1000:rwx,d:u:1000:rwx "$storage"
+    fi
+    # Shared ancestors must be traversable by host QEMU; report custom-path issues.
+    run_as_root setfacl -m u:1000:rx "$data"
+    for qemu_user in libvirt-qemu qemu; do
+        if id "$qemu_user" >/dev/null 2>&1; then
+            ancestor="$data"
+            while [[ "$ancestor" != / ]]; do
+                run_as_root setfacl -m "u:$qemu_user:rx" "$ancestor"
+                ancestor="$(dirname "$ancestor")"
+            done
+        fi
+    done
+    set_env_value VM_FOUNDRY_DATA_DIR "$data"
+    set_env_value KVM_READONLY_PATH "$data"
+    set_env_value KVM_STORAGE_PATH "$storage"
+    set_env_value CLOUD_INIT_TEMPLATE "$cloud"
+    set_env_value LIBVIRT_SOCKET_PATH "$socket"
 
-    set_env_value LIBVIRT_SOCKET_PATH "$libvirt_socket"
-    set_env_value KVM_READONLY_PATH "$kvm_readonly"
-    set_env_value KVM_STORAGE_PATH "$kvm_storage"
+    version="$(read_env_value UBUNTU_VERSION)"
+    read -r -p "Ubuntu template [22.04/24.04] (${version:-24.04}): " answer
+    version="${answer:-${version:-24.04}}"
+    [[ "$version" == 22.04 || "$version" == 24.04 ]] || die "Choose 22.04 or 24.04"
+    if [[ ! -f "$data/templates/ubuntu-$version-lvm/ubuntu-$version-lvm.qcow2" ]]; then
+        read -r -p "Build missing Ubuntu $version LVM image now? Downloads an ISO and may take 30+ minutes [Y/n]: " answer
+        case "$answer" in
+            ''|y|Y|yes)
+                if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+                    python3 "$SCRIPT_DIR/scripts/prepare_image.py" "$SCRIPT_DIR" "$data" "$version"
+                else
+                    run_as_root usermod -aG kvm "$owner"
+                    run_as_root runuser -u "$owner" -- python3 "$SCRIPT_DIR/scripts/prepare_image.py" "$SCRIPT_DIR" "$data" "$version"
+                fi
+                ;;
+            *) die "A template is required. Rerun the installer to build it." ;;
+        esac
+    fi
+    set_env_value UBUNTU_VERSION "$version"
+}
+
+ensure_python() {
+    if python3 -c 'import yaml' >/dev/null 2>&1; then return; fi
+    if command -v apt-get >/dev/null; then
+        run_as_root apt-get update
+        run_as_root apt-get install -y python3 python3-yaml ca-certificates
+    elif command -v dnf >/dev/null; then
+        run_as_root dnf install -y python3 python3-pyyaml ca-certificates
+    elif command -v pacman >/dev/null; then
+        run_as_root pacman -S --needed --noconfirm python python-yaml ca-certificates
+    elif command -v zypper >/dev/null; then
+        run_as_root zypper --non-interactive install python3 python3-PyYAML ca-certificates
+    elif command -v apk >/dev/null; then
+        run_as_root apk add python3 py3-yaml ca-certificates
+    else
+        die "Install Python 3 and PyYAML on this distribution"
+    fi
+    python3 -c 'import yaml' || die "Python 3 with PyYAML is required"
+}
+
+ensure_local_qemu() {
+    if ! command -v virsh >/dev/null || ! command -v qemu-img >/dev/null || ! command -v qemu-system-x86_64 >/dev/null || ! command -v setfacl >/dev/null; then
+        if command -v apt-get >/dev/null; then
+            run_as_root apt-get update
+            run_as_root apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients acl
+        elif command -v dnf >/dev/null; then
+            run_as_root dnf install -y qemu-kvm qemu-img libvirt libvirt-client acl
+        else
+            die "Install QEMU/KVM, libvirt, virsh and ACL tools; automatic local-QEMU packages support Debian/Ubuntu and Fedora/RHEL"
+        fi
+    fi
+    [[ -c /dev/kvm ]] || die "KVM is unavailable; enable hardware or nested virtualization"
+    if [[ ! -S /var/run/libvirt/libvirt-sock ]]; then
+        run_as_root systemctl enable --now libvirtd || run_as_root systemctl enable --now virtproxyd.socket
+    fi
+    # Only create/start the standard network if absent/inactive.
+    if ! run_as_root virsh -c qemu:///system net-info default >/dev/null 2>&1; then
+        run_as_root virsh -c qemu:///system net-define "$SCRIPT_DIR/templates/libvirt/default-network.xml"
+    fi
+    if ! run_as_root virsh -c qemu:///system net-list --name | grep -Fxq default; then
+        run_as_root virsh -c qemu:///system net-start default
+    fi
+    run_as_root virsh -c qemu:///system net-autostart default
 }
 
 generate_password_hash() {
@@ -329,49 +415,27 @@ ensure_admin_credentials() {
 
 prepare_runtime_config() {
     local backend="$1"
-    local libvirt_socket kvm_readonly kvm_storage
 
     mkdir -p "$RUNTIME_DIR"
     chmod 755 "$RUNTIME_DIR"
-    cp -- "$SCRIPT_DIR/portal/config.yml" "$RUNTIME_CONFIG"
-    chmod 644 "$RUNTIME_CONFIG"
 
     if [[ "$backend" == "vcsim" ]]; then
-        sed -i 's/^  backend: .*/  backend: vcsim/' "$RUNTIME_CONFIG"
+        python3 "$SCRIPT_DIR/scripts/configure_runtime.py" "$SCRIPT_DIR" vcsim
         set_env_value COMPOSE_FILE "./docker-compose.yml"
         return
     fi
 
-    libvirt_socket="$(read_env_value LIBVIRT_SOCKET_PATH)"
-    kvm_readonly="$(read_env_value KVM_READONLY_PATH)"
-    kvm_storage="$(read_env_value KVM_STORAGE_PATH)"
-    # libvirt runs on the host: XML and qcow2 backing paths must resolve there
-    # exactly as they do inside the portal container.
-    sed -E -i \
-        -e 's/^  backend: .*/  backend: local_qemu/' \
-        -e "s#^    storage_path: .*#    storage_path: $kvm_storage#" \
-        -e "s#^    cloud_init_template: .*#    cloud_init_template: $kvm_readonly/cloud_init.cfg.orig#" \
-        -e "s#^([[:space:]]+[^:]+: )[^[:space:]]*/templates/#\\1$kvm_readonly/templates/#" \
-        "$RUNTIME_CONFIG"
-
-    libvirt_socket="$(read_env_value LIBVIRT_SOCKET_PATH)"
-    kvm_readonly="$(read_env_value KVM_READONLY_PATH)"
-    kvm_storage="$(read_env_value KVM_STORAGE_PATH)"
-    cat >"$RUNTIME_COMPOSE_OVERRIDE" <<EOF
-services:
-  portal:
-    volumes:
-      - $libvirt_socket:/var/run/libvirt/libvirt-sock
-      - $kvm_readonly:$kvm_readonly:ro
-      - $kvm_storage:$kvm_storage
-EOF
-    chmod 644 "$RUNTIME_COMPOSE_OVERRIDE"
+    python3 "$SCRIPT_DIR/scripts/configure_runtime.py" "$SCRIPT_DIR" local_qemu \
+        --data "$(read_env_value KVM_READONLY_PATH)" \
+        --storage "$(read_env_value KVM_STORAGE_PATH)" \
+        --cloud-init "$(read_env_value CLOUD_INIT_TEMPLATE)" \
+        --socket "$(read_env_value LIBVIRT_SOCKET_PATH)"
     set_env_value COMPOSE_FILE "./docker-compose.yml:./.runtime/docker-compose.local-qemu.yml"
 }
 
 main() {
     local no_start=false
-    local argument
+    local argument backend
 
     for argument in "$@"; do
         case "$argument" in
@@ -385,6 +449,7 @@ main() {
     umask 077
 
     ensure_docker
+    ensure_python
 
     if [[ ! -f "$ENV_FILE" ]]; then
         touch "$ENV_FILE"
@@ -413,6 +478,8 @@ main() {
 
     log "Building and starting the portal"
     run_compose up --build -d
+    # Atomic config replacement changes the inode behind a file bind mount.
+    run_compose up -d --no-deps --force-recreate portal
 
     cat <<'EOF'
 
@@ -425,4 +492,4 @@ Stop:      docker compose down
 EOF
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

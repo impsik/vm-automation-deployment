@@ -13,6 +13,9 @@ import app
 class ResizeApprovalIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        backend = patch.object(app, 'PROVISIONING_BACKEND', 'local_qemu')
+        backend.start()
+        cls.addClassCleanup(backend.stop)
         cls.test_directory = Path(tempfile.mkdtemp(prefix="vm-foundry-tests-"))
         app.DATA_FILE = cls.test_directory / "portal.db"
         app.SESSIONS.clear()

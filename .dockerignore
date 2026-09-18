@@ -1,0 +1,10 @@
+.git
+.env
+.runtime
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/*.qcow2
+**/*.iso
+output
+packer_cache

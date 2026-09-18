@@ -13,6 +13,9 @@ import app
 class VmDeletionIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        backend = patch.object(app, 'PROVISIONING_BACKEND', 'local_qemu')
+        backend.start()
+        cls.addClassCleanup(backend.stop)
         cls.test_directory = Path(tempfile.mkdtemp(prefix="vm-foundry-delete-tests-"))
         app.DATA_FILE = cls.test_directory / "portal.db"
         cls.original_storage_path = app.LOCAL_QEMU.get("storage_path")

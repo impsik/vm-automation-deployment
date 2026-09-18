@@ -22,10 +22,10 @@ support:
   email: it.taristu@domeen.ee
 
 notifications:
-  enabled: true
-  to: imre@localhost
+  enabled: false
+  to: admin@example.com
   from: vm-foundry@localhost
-  smtp_host: 172.17.0.1
+  smtp_host: localhost
   smtp_port: 25
 
 # PoC only: no message leaves the portal. The generated message is stored with
@@ -50,14 +50,14 @@ networks:
 
 provisioning:
   # Temporary PoC backend. Change to "vcsim" for the VMware simulator.
-  backend: local_qemu
+  backend: vcsim
   local_qemu:
     uri: qemu:///system
     network: default
-    ssh_user: imre
-    storage_path: /home/imre/chia/Hetznerist/kvm/vm-foundry
-    cloud_init_template: /home/imre/chia/Hetznerist/kvm/cloud_init.cfg.orig
+    ssh_user: ubuntu
+    storage_path: /var/lib/vm-foundry/instances
+    cloud_init_template: /var/lib/vm-foundry/cloud-init/user-data.yml
     reserve_percent: 20
     images:
-      Ubuntu 24.04 LTS (LVM): /home/imre/chia/Hetznerist/kvm/templates/ubuntu-24.04-lvm/ubuntu-24.04-lvm.qcow2
-      Ubuntu 22.04 LTS (LVM): /home/imre/chia/Hetznerist/kvm/templates/ubuntu-22.04-lvm/ubuntu-22.04-lvm.qcow2
+      Ubuntu 24.04 LTS (LVM): /var/lib/vm-foundry/templates/ubuntu-24.04-lvm/ubuntu-24.04-lvm.qcow2
+      Ubuntu 22.04 LTS (LVM): /var/lib/vm-foundry/templates/ubuntu-22.04-lvm/ubuntu-22.04-lvm.qcow2

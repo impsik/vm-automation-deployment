@@ -1,0 +1,12 @@
+#cloud-config
+hostname: HOSTNAME
+manage_etc_hosts: true
+preserve_hostname: false
+users: []
+disable_root: true
+ssh_pwauth: false
+package_update: false
+package_upgrade: false
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
+# The portal installs the requester's selected public key and Linux account.
