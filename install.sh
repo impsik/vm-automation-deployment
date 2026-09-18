@@ -6,6 +6,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly ENV_FILE="$SCRIPT_DIR/.env"
 readonly RUNTIME_DIR="$SCRIPT_DIR/.runtime"
 readonly RUNTIME_CONFIG="$RUNTIME_DIR/config.yml"
+readonly RUNTIME_COMPOSE_OVERRIDE="$RUNTIME_DIR/docker-compose.local-qemu.yml"
 
 DOCKER=(docker)
 COMPOSE=(docker compose)
@@ -20,7 +21,7 @@ The installer:
   - installs Docker Engine and Docker Compose when missing;
   - creates .env with a local administrator account;
   - generates a PBKDF2-SHA256 password hash;
-  - prepares a self-contained VMware vcsim demo configuration;
+  - generates configuration for the selected vcsim or local_qemu backend;
   - builds and starts the portal with Docker Compose.
 
 Options:
@@ -202,6 +203,49 @@ read_env_value() {
     printf '%s' "$value"
 }
 
+choose_backend() {
+    local current backend
+    current="$(read_env_value PROVISIONING_BACKEND)"
+    current="${current:-vcsim}"
+
+    while :; do
+        read -r -p "Provisioning backend [vcsim/local_qemu] ($current): " backend
+        backend="${backend:-$current}"
+        case "$backend" in
+            vcsim|local_qemu) break ;;
+            *) printf 'Choose either vcsim or local_qemu.\n' >&2 ;;
+        esac
+    done
+
+    set_env_value PROVISIONING_BACKEND "$backend"
+    printf '%s' "$backend"
+}
+
+configure_local_qemu_paths() {
+    local default_kvm default_storage default_socket
+    local libvirt_socket kvm_readonly kvm_storage
+
+    default_socket="/var/run/libvirt/libvirt-sock"
+    default_kvm="/home/imre/chia/Hetznerist/kvm"
+    default_storage="$default_kvm/vm-foundry"
+
+    read -r -p "Libvirt socket [$default_socket]: " libvirt_socket
+    libvirt_socket="${libvirt_socket:-$default_socket}"
+    read -r -p "QEMU read-only data path [$default_kvm]: " kvm_readonly
+    kvm_readonly="${kvm_readonly:-$default_kvm}"
+    read -r -p "QEMU storage path [$default_storage]: " kvm_storage
+    kvm_storage="${kvm_storage:-$default_storage}"
+
+    [[ -S "$libvirt_socket" ]] || die "Libvirt socket not found: $libvirt_socket"
+    [[ -f "$kvm_readonly/cloud_init.cfg.orig" ]] || die "Cloud-init template not found under: $kvm_readonly"
+    [[ -d "$kvm_readonly/templates" ]] || die "QEMU templates directory not found: $kvm_readonly/templates"
+    mkdir -p "$kvm_storage"
+
+    set_env_value LIBVIRT_SOCKET_PATH "$libvirt_socket"
+    set_env_value KVM_READONLY_PATH "$kvm_readonly"
+    set_env_value KVM_STORAGE_PATH "$kvm_storage"
+}
+
 generate_password_hash() {
     local password="$1"
 
@@ -276,14 +320,40 @@ ensure_admin_credentials() {
 }
 
 prepare_runtime_config() {
+    local backend="$1"
+    local libvirt_socket kvm_readonly kvm_storage
+
     mkdir -p "$RUNTIME_DIR"
     chmod 755 "$RUNTIME_DIR"
     cp -- "$SCRIPT_DIR/portal/config.yml" "$RUNTIME_CONFIG"
     chmod 644 "$RUNTIME_CONFIG"
 
-    # The self-contained installer uses vcsim. Local QEMU remains available for
-    # advanced deployments by using the original portal/config.yml and paths.
-    sed -i 's/^  backend: local_qemu/  backend: vcsim/' "$RUNTIME_CONFIG"
+    if [[ "$backend" == "vcsim" ]]; then
+        sed -i 's/^  backend: .*/  backend: vcsim/' "$RUNTIME_CONFIG"
+        set_env_value COMPOSE_FILE "./docker-compose.yml"
+        return
+    fi
+
+    sed -E -i \
+        -e 's/^  backend: .*/  backend: local_qemu/' \
+        -e 's#^    storage_path: .*#    storage_path: /vmware-storage#' \
+        -e 's#^    cloud_init_template: .*#    cloud_init_template: /vmware-kvm/cloud_init.cfg.orig#' \
+        -e 's#^([[:space:]]+[^:]+: )[^[:space:]]*/templates/#\1/vmware-kvm/templates/#' \
+        "$RUNTIME_CONFIG"
+
+    libvirt_socket="$(read_env_value LIBVIRT_SOCKET_PATH)"
+    kvm_readonly="$(read_env_value KVM_READONLY_PATH)"
+    kvm_storage="$(read_env_value KVM_STORAGE_PATH)"
+    cat >"$RUNTIME_COMPOSE_OVERRIDE" <<EOF
+services:
+  portal:
+    volumes:
+      - $libvirt_socket:/var/run/libvirt/libvirt-sock
+      - $kvm_readonly:/vmware-kvm:ro
+      - $kvm_storage:/vmware-storage
+EOF
+    chmod 644 "$RUNTIME_COMPOSE_OVERRIDE"
+    set_env_value COMPOSE_FILE "./docker-compose.yml:./.runtime/docker-compose.local-qemu.yml"
 }
 
 main() {
@@ -311,8 +381,14 @@ main() {
     log "Preparing administrator credentials"
     ensure_admin_credentials
 
+    log "Selecting provisioning backend"
+    backend="$(choose_backend)"
+    if [[ "$backend" == "local_qemu" ]]; then
+        configure_local_qemu_paths
+    fi
+
     set_env_value PORTAL_CONFIG_PATH "./.runtime/config.yml"
-    prepare_runtime_config
+    prepare_runtime_config "$backend"
 
     log "Validating Docker Compose configuration"
     run_compose config >/dev/null

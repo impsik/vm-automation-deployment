@@ -16,20 +16,23 @@ cd vm-automation-deployment
 ./install.sh
 ```
 
-The installer asks for the local administrator password, creates the required
-`.env` file with a PBKDF2-SHA256 hash, prepares the self-contained VMware vcsim
-demo backend and starts the portal. Open <http://localhost:8080> afterwards.
-Run `./install.sh --no-start` if you only want to prepare the configuration.
+The installer asks for the local administrator password and provisioning
+backend (`vcsim` or `local_qemu`), creates the required `.env` file with a
+PBKDF2-SHA256 hash, generates `.runtime/config.yml` and starts the portal.
+Open <http://localhost:8080> afterwards. Run `./install.sh --no-start` if you
+only want to prepare the configuration.
+
+`vcsim` is self-contained and needs no host VM storage. For `local_qemu`, the
+installer also asks for the libvirt socket, QEMU image/template directory and
+VM storage directory, then creates the required Compose override and maps them
+to container paths.
 
 The installer supports Debian/Ubuntu, Fedora/RHEL-compatible systems, Arch,
 openSUSE and Alpine. It may ask for the `sudo` password to install system
 packages and start Docker.
 
 The generated `.env` and `.runtime/` directory are local-only and are ignored
-by Git. The standard Docker installation intentionally does not mount host
-libvirt or storage paths because it uses the self-contained `vcsim` backend.
-Advanced local-QEMU deployments should run the portal directly or provide a
-dedicated Compose override with host paths mapped to container paths.
+by Git.
 
 ## Run with Docker Compose
 

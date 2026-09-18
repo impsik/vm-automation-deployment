@@ -9,7 +9,8 @@ RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev libvirt-client qemu-i
     && ansible-galaxy collection install community.vmware \
     && apk del gcc musl-dev libffi-dev openssl-dev \
     && addgroup -g 1000 portal && adduser -D -u 1000 -G portal portal \
-    && mkdir -p /data && chown portal:portal /data
+    && mkdir -p /data /var/run/libvirt /vmware-kvm /vmware-storage \
+    && chown portal:portal /data
 
 COPY portal/app.py ./
 COPY portal/static ./static
