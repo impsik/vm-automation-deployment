@@ -14,5 +14,7 @@ if os.path.exists(socket):
 os.setgroups(sorted(groups))
 os.setgid(user.pw_gid)
 os.setuid(user.pw_uid)
+# Dropping privileges does not change the environment inherited from root.
+os.environ.update(HOME=user.pw_dir, USER=user.pw_name, LOGNAME=user.pw_name)
 os.execvp(sys.argv[1], sys.argv[1:])
 PY

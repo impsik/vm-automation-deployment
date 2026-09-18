@@ -6,7 +6,7 @@ COPY --from=govc /govc /usr/local/bin/govc
 
 RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev libvirt-client qemu-img xorriso \
     && pip install --no-cache-dir ansible-core pyvmomi ldap3 \
-    && ansible-galaxy collection install community.vmware \
+    && ansible-galaxy collection install community.vmware -p /usr/share/ansible/collections \
     && apk del gcc musl-dev libffi-dev openssl-dev \
     && addgroup -g 1000 portal && adduser -D -u 1000 -G portal portal \
     && mkdir -p /data /var/run/libvirt \
