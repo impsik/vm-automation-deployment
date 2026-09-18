@@ -21,6 +21,12 @@ authentication:
 support:
   email: it.taristu@domeen.ee
 
+netbox:
+  enabled: false
+  url: http://127.0.0.1:9080
+  cluster_id: null
+  # API credential is supplied through NETBOX_TOKEN, never committed here.
+
 notifications:
   enabled: false
   to: admin@example.com

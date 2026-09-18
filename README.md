@@ -127,6 +127,40 @@ docker compose exec portal python -m unittest discover -s tests -v
 The tests use a separate temporary SQLite database and do not modify portal
 requests or real virtual machines.
 
+## NetBox registration
+
+To register newly provisioned VMs in NetBox 4.x, set these values in the local
+`.env` file (never commit a real API token):
+
+```dotenv
+NETBOX_ENABLED=true
+NETBOX_URL=http://127.0.0.1:9080
+NETBOX_CLUSTER_ID=1
+NETBOX_TOKEN=your-service-account-token
+```
+
+Use the actual cluster ID from NetBox, and a dedicated service account with
+view/add/change permissions for virtual machines, VM interfaces and IP addresses,
+plus view permission for the cluster. The integration needs no delete or admin
+permissions. Use HTTPS for a remote NetBox server. The default host-networked
+portal can reach a NetBox published on the same host through the URL above.
+Recreate the portal container after changing environment variables.
+
+Registration records the FQDN, cluster, vCPUs, memory and total disk allocation
+(converted to MB), and owner/project/environment/image metadata. A known lease
+address is assigned to a `primary` VM interface and set as the primary IP. Since
+the authoritative subnet mask is not available from the portal's lease data,
+the IP is recorded with a host prefix (/32 or /128), not a guessed subnet.
+An IP learned later during portal refresh is synchronized too.
+
+If registration fails, the VM remains completed, the workflow shows the error,
+and **Retry NetBox registration** retries without creating a duplicate VM.
+Existing same-name records owned by someone else and IPs assigned elsewhere
+are never taken over. The API token is not returned to the browser or stored in
+request events. Both legacy Token and `nbt_` Bearer credentials are supported.
+This integration registers newly created VMs; it does not bulk-import old VMs
+or automatically mirror later resize/deletion operations.
+
 ## Run without Docker
 
 ```bash

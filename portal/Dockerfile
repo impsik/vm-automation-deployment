@@ -13,6 +13,7 @@ RUN apk add --no-cache gcc musl-dev libffi-dev openssl-dev libvirt-client qemu-i
     && chown portal:portal /data
 
 COPY portal/app.py ./
+COPY portal/netbox_client.py ./
 COPY portal/static ./static
 COPY portal/entrypoint.sh /entrypoint.sh
 COPY ansible ./ansible

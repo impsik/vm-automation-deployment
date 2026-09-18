@@ -203,6 +203,7 @@ function lifecycleControls(r) {
         ${state === "running" ? `<button class="secondary vm-operation" data-operation="stop" data-id="${esc(r.id)}">Stop</button>
           <button class="secondary vm-operation" data-operation="reboot" data-id="${esc(r.id)}">Reboot</button>` : ""}
         ${r.last_failed_resize ? `<button class="secondary vm-operation" data-operation="retry-resize" data-id="${esc(r.id)}">Retry resize</button>` : ""}
+        ${r.netbox?.status === "error" ? `<button type="button" class="secondary netbox-retry" data-id="${esc(r.id)}">Retry NetBox registration</button>` : ""}
         <button class="reject vm-delete" data-id="${esc(r.id)}" data-hostname="${esc(r.hostname)}">Delete VM</button>
       </div>
       <details class="snapshot-list" data-detail-key="manual-snapshots-${esc(r.id)}">
@@ -461,6 +462,18 @@ async function loadRequests() {
   });
   document.querySelectorAll(".vm-console").forEach(button => button.onclick = () => {
     openConsole(button.dataset.id, button.dataset.hostname);
+  });
+  document.querySelectorAll(".netbox-retry").forEach(button => button.onclick = async () => {
+    button.disabled = true;
+    try {
+      await api(`/api/requests/${button.dataset.id}/register-netbox`, {method: "POST", body: "{}"});
+      toast("VM registered in NetBox");
+      await loadRequests();
+    } catch (error) {
+      toast(error.error || "NetBox registration failed");
+    } finally {
+      button.disabled = false;
+    }
   });
   document.querySelectorAll(".vm-delete").forEach(button => button.onclick = async () => {
     const originalContent = [...button.childNodes];

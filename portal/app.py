@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 from ldap3 import Connection, Server
+from netbox_client import NetBoxClient, NetBoxError
 
 
 PORT = int(os.getenv("PORT", "8080"))
@@ -59,6 +60,11 @@ def load_config() -> dict:
 
 
 CONFIG = load_config()
+NETBOX = CONFIG.get('netbox', {})
+NETBOX_ENABLED = (os.getenv('NETBOX_ENABLED') or str(NETBOX.get('enabled', False))).lower() in ('true', '1', 'yes')
+NETBOX_URL = os.getenv('NETBOX_URL') or NETBOX.get('url', '')
+NETBOX_TOKEN = os.getenv('NETBOX_TOKEN', '')
+NETBOX_CLUSTER_ID = os.getenv('NETBOX_CLUSTER_ID') or NETBOX.get('cluster_id')
 
 PROFILES = {
     "small": {"label": "Small", "vcpu": 2, "memory_gb": 4, "disk_gb": 40},
@@ -1905,6 +1911,30 @@ def local_qemu_ip(hostname: str, timeout_seconds: int = 20) -> str | None:
     return None
 
 
+def register_netbox(request: dict) -> bool:
+    """Inventory failure must not invalidate a successfully provisioned VM."""
+    if not NETBOX_ENABLED:
+        request['netbox'] = {'status': 'disabled'}
+        return False
+    registration_event = next((item for item in request['events']
+                               if item['name'] == 'NetBox registration'), None)
+    if registration_event is None:
+        registration_event = event('NetBox registration')
+        request['events'].append(registration_event)
+    try:
+        result = NetBoxClient(NETBOX_URL, NETBOX_TOKEN, NETBOX_CLUSTER_ID).register(
+            request, request_data_disks(request))
+        request['netbox'] = dict(result, status='registered', synced_at=now())
+        registration_event.update(state='done', timestamp=now(), detail=f'VM registered in NetBox (ID {result["vm_id"]})')
+        return True
+    except (NetBoxError, ValueError, KeyError, TypeError) as error:
+        # Keep error messages credential-free and leave the VM's status intact.
+        detail = str(error) if isinstance(error, NetBoxError) else 'Invalid NetBox configuration or response'
+        request['netbox'] = {'status': 'error', 'error': detail, 'attempted_at': now()}
+        registration_event.update(state='failed', timestamp=now(), detail=detail)
+        return False
+
+
 def reconcile_pending_ip(requests: list[dict]) -> None:
     """Resolve DHCP leases that appeared after the initial provisioning wait."""
     if PROVISIONING_BACKEND != "local_qemu":
@@ -1926,6 +1956,8 @@ def reconcile_pending_ip(requests: list[dict]) -> None:
             detail=ip_address,
             timestamp=now(),
         )
+        if request.get('netbox', {}).get('status') in ('registered', 'error'):
+            register_netbox(request)
         save_requests([request])
 
 
@@ -2000,7 +2032,7 @@ def provision(request: dict) -> None:
                 request["events"].append(event("IP address assigned", detail=ip_address))
             else:
                 request["events"].append(event("IP address pending", "waiting", "DHCP lease is not available yet"))
-        request["events"].append(event("NetBox registration", detail="PoC simulation"))
+        register_netbox(request)
         request["events"].append(event("Nagios registration", detail="PoC simulation"))
         simulate_hostmaster_email(request)
         request["status"] = "completed"
@@ -2567,6 +2599,22 @@ class PortalHandler(SimpleHTTPRequestHandler):
                     ),
                 )
             return self.send_json(key, HTTPStatus.CREATED)
+
+        match = re.fullmatch(r"/api/requests/([a-z0-9-]+)/register-netbox", path)
+        if match:
+            with LOCK:
+                request = next((item for item in load_requests() if item['id'] == match.group(1)), None)
+                if not request:
+                    return self.send_json({'error': 'Request not found'}, HTTPStatus.NOT_FOUND)
+                if self.current_role() != 'admin' and request.get('requested_by') != authenticated_user:
+                    return self.send_json({'error': 'You do not have access to this VM'}, HTTPStatus.FORBIDDEN)
+                if request.get('status') != 'completed' or not NETBOX_ENABLED:
+                    return self.send_json({'error': 'A completed VM and enabled NetBox integration are required'}, HTTPStatus.CONFLICT)
+                success = register_netbox(request)
+                save_requests([request])
+            if not success:
+                return self.send_json({'error': request['netbox']['error']}, HTTPStatus.BAD_GATEWAY)
+            return self.send_json(request)
 
         if path == "/api/requests":
             clean, errors = validate(payload, authenticated_user)
