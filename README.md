@@ -25,7 +25,10 @@ only want to prepare the configuration.
 `vcsim` is self-contained and needs no host VM storage. For `local_qemu`, the
 installer also asks for the libvirt socket, QEMU image/template directory and
 VM storage directory, then creates the required Compose override and maps them
-to container paths.
+to identical absolute paths inside the container. Host libvirt must be able to
+resolve the same disk and qcow2 backing-image paths as the portal. If storage
+is below the read-only image directory, create that storage directory on the
+host before starting Compose (the installer does this).
 
 The installer supports Debian/Ubuntu, Fedora/RHEL-compatible systems, Arch,
 openSUSE and Alpine. It may ask for the `sudo` password to install system

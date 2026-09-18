@@ -241,6 +241,14 @@ configure_local_qemu_paths() {
     [[ -d "$kvm_readonly/templates" ]] || die "QEMU templates directory not found: $kvm_readonly/templates"
     mkdir -p "$kvm_storage"
 
+    kvm_readonly="$(realpath "$kvm_readonly")"
+    kvm_storage="$(realpath "$kvm_storage")"
+    # These values are interpolated into YAML and sed expressions below.
+    for path in "$libvirt_socket" "$kvm_readonly" "$kvm_storage"; do
+        [[ "$path" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "Use absolute paths without spaces or special characters: $path"
+    done
+    [[ "$kvm_storage" != "$kvm_readonly" ]] || die "Storage must be a separate directory from read-only image data"
+
     set_env_value LIBVIRT_SOCKET_PATH "$libvirt_socket"
     set_env_value KVM_READONLY_PATH "$kvm_readonly"
     set_env_value KVM_STORAGE_PATH "$kvm_storage"
@@ -334,11 +342,16 @@ prepare_runtime_config() {
         return
     fi
 
+    libvirt_socket="$(read_env_value LIBVIRT_SOCKET_PATH)"
+    kvm_readonly="$(read_env_value KVM_READONLY_PATH)"
+    kvm_storage="$(read_env_value KVM_STORAGE_PATH)"
+    # libvirt runs on the host: XML and qcow2 backing paths must resolve there
+    # exactly as they do inside the portal container.
     sed -E -i \
         -e 's/^  backend: .*/  backend: local_qemu/' \
-        -e 's#^    storage_path: .*#    storage_path: /vmware-storage#' \
-        -e 's#^    cloud_init_template: .*#    cloud_init_template: /vmware-kvm/cloud_init.cfg.orig#' \
-        -e 's#^([[:space:]]+[^:]+: )[^[:space:]]*/templates/#\1/vmware-kvm/templates/#' \
+        -e "s#^    storage_path: .*#    storage_path: $kvm_storage#" \
+        -e "s#^    cloud_init_template: .*#    cloud_init_template: $kvm_readonly/cloud_init.cfg.orig#" \
+        -e "s#^([[:space:]]+[^:]+: )[^[:space:]]*/templates/#\\1$kvm_readonly/templates/#" \
         "$RUNTIME_CONFIG"
 
     libvirt_socket="$(read_env_value LIBVIRT_SOCKET_PATH)"
@@ -349,8 +362,8 @@ services:
   portal:
     volumes:
       - $libvirt_socket:/var/run/libvirt/libvirt-sock
-      - $kvm_readonly:/vmware-kvm:ro
-      - $kvm_storage:/vmware-storage
+      - $kvm_readonly:$kvm_readonly:ro
+      - $kvm_storage:$kvm_storage
 EOF
     chmod 644 "$RUNTIME_COMPOSE_OVERRIDE"
     set_env_value COMPOSE_FILE "./docker-compose.yml:./.runtime/docker-compose.local-qemu.yml"
