@@ -158,8 +158,12 @@ and **Retry NetBox registration** retries without creating a duplicate VM.
 Existing same-name records owned by someone else and IPs assigned elsewhere
 are never taken over. The API token is not returned to the browser or stored in
 request events. Both legacy Token and `nbt_` Bearer credentials are supported.
-This integration registers newly created VMs; it does not bulk-import old VMs
-or automatically mirror later resize/deletion operations.
+This integration registers newly created VMs and synchronizes CPU, RAM and total
+disk allocation after every successful resize (including approved resizes and
+resize retries). Failed or merely pending resizes do not publish requested sizes.
+NetBox failures leave the successful resize intact; use **Retry NetBox
+registration** to synchronize the current values without resizing again.
+It does not bulk-import old VMs or automatically mirror deletion/rollback operations.
 
 ## Run without Docker
 

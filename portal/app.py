@@ -1722,6 +1722,10 @@ def resize_local_qemu(
         request.pop("last_failed_resize", None)
         if snapshot:
             snapshot["resize_completed_at"] = now()
+        # All successful resize paths (direct, approved and retried) converge here.
+        # Sync only after replacing both CPU/RAM/OS-disk and data-disk values.
+        # Inventory failure is recorded separately and does not undo the resize.
+        register_netbox(request)
         send_notification(
             "resized",
             request,
